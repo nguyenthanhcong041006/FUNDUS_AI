@@ -1,0 +1,98 @@
+{
+  "image_id": "synthetic_fundus_demo.png",
+  "quality": {
+    "status": "gradable",
+    "blur_score": 105.17,
+    "mean_brightness": 90.37,
+    "contrast_std": 19.18,
+    "fov_coverage_ratio": 0.6361,
+    "underexposed_ratio": 0.0,
+    "overexposed_ratio": 0.0,
+    "warnings": [],
+    "is_gradable": true
+  },
+  "anatomical_structures": {
+    "optic_disc": {
+      "area_px2": 5025.0,
+      "horizontal_diameter_px": 81.0,
+      "vertical_diameter_px": 81.0
+    },
+    "optic_cup": {
+      "area_px2": 2079.0,
+      "horizontal_diameter_px": 51.0,
+      "vertical_diameter_px": 53.0,
+      "vertical_cdr": 0.654,
+      "horizontal_cdr": 0.63,
+      "cup_disc_area_ratio": 0.414
+    },
+    "fovea": {
+      "x": 279,
+      "y": 299,
+      "disc_fovea_distance_px": 154.5
+    },
+    "blood_vessels": {
+      "density_percent": 3.73,
+      "total_length_px": 1446,
+      "estimated_mean_width_px": 4.3,
+      "branch_point_count": 788
+    }
+  },
+  "lesions": [
+    {
+      "type": "hemorrhage",
+      "count": 2,
+      "total_area_px2": 477.0,
+      "area_ratio_percent": 0.2861
+    },
+    {
+      "type": "hard_exudate",
+      "count": 3,
+      "total_area_px2": 274.0,
+      "area_ratio_percent": 0.1643
+    },
+    {
+      "type": "cotton_wool_spot",
+      "count": 4,
+      "total_area_px2": 2400.0,
+      "area_ratio_percent": 1.4393
+    }
+  ],
+  "spatial_distribution": {
+    "disc_fovea_distance_px": 154.5,
+    "macular_involvement": true,
+    "quadrant_lesion_pixels": {
+      "superior_temporal": 108,
+      "superior_nasal": 2285,
+      "inferior_temporal": 52,
+      "inferior_nasal": 706
+    },
+    "coordinate_origin": "fovea"
+  },
+  "disease_predictions": {
+    "diabetic_retinopathy": {
+      "grade": 1,
+      "grade_label": "Mild NPDR",
+      "confidence": 0.65
+    },
+    "glaucoma": {
+      "risk_score": 0.78,
+      "risk_level": "elevated_suspicion"
+    },
+    "hypertensive_retinopathy": {
+      "risk_score": 0.15,
+      "risk_level": "normal_limits"
+    },
+    "amd": {
+      "risk_score": 0.08,
+      "risk_level": "low_suspicion"
+    }
+  },
+  "screening_status": "urgent_referral",
+  "clinical_disclaimer": "Research prototype output only. Not for standalone clinical diagnosis. Any positive or borderline screening flag requires examination by a licensed ophthalmologist.",
+  "model_versions": {
+    "vessel": "v1.0",
+    "optic_disc_cup": "v1.0",
+    "lesion": "v1.0",
+    "classifier": "v1.0"
+  }
+}

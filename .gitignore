@@ -1,0 +1,73 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE & editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Datasets raw files (large files)
+datasets/raw/**
+!datasets/raw/.gitkeep
+!datasets/raw/**/.gitkeep
+datasets/processed/*
+!datasets/processed/.gitkeep
+datasets/annotations/*
+!datasets/annotations/.gitkeep
+datasets/splits/*
+!datasets/splits/.gitkeep
+
+# Checkpoint model weights
+checkpoints/**/*.pth
+checkpoints/**/*.pt
+checkpoints/**/*.onnx
+!checkpoints/**/.gitkeep
+
+# Outputs and logs
+outputs/annotated_images/*
+!outputs/annotated_images/.gitkeep
+outputs/masks/*
+!outputs/masks/.gitkeep
+outputs/reports/*
+!outputs/reports/.gitkeep
+outputs/logs/*
+!outputs/logs/.gitkeep
+
+# Logs and Tensorboard
+runs/
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+

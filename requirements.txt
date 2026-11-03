@@ -1,0 +1,31 @@
+# FUNDUS AI Dependencies
+# -------------------------------------------------------------
+# Note: For PyTorch with CUDA support on Windows, visit:
+# https://pytorch.org/get-started/locally/
+# Example for CUDA 12.x:
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# Core Scientific & Image Processing
+numpy>=1.24.0
+scipy>=1.10.0
+pillow>=9.5.0
+opencv-python>=4.8.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+matplotlib>=3.7.0
+pyyaml>=6.0
+
+# Deep Learning & Computer Vision
+torch>=2.0.0
+torchvision>=0.15.0
+albumentations>=1.3.1
+segmentation-models-pytorch>=0.3.3
+
+# Experiment Tracking & Metrics
+torchmetrics>=1.0.0
+tensorboard>=2.14.0
+tqdm>=4.65.0
+
+# Optional API / Deployment & Testing
+pytest>=7.4.0
+

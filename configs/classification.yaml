@@ -1,0 +1,36 @@
+# Configuration for Disease Classification & DR Grading
+
+model:
+  backbone: "efficientnet_b0" # options: efficientnet_b0, resnet50, mobilenet_v2
+  pretrained: true
+  dropout: 0.3
+  weights_path: "checkpoints/classification/best_classifier.pth"
+
+diabetic_retinopathy:
+  num_classes: 5
+  grades:
+    0: "No Apparent DR"
+    1: "Mild NPDR"
+    2: "Moderate NPDR"
+    3: "Severe NPDR"
+    4: "Proliferative DR"
+  loss: "cross_entropy" # or ordinal loss
+
+multi_disease:
+  diseases:
+    - "normal"
+    - "diabetic_retinopathy"
+    - "glaucoma"
+    - "cataract"
+    - "amd"
+    - "hypertension"
+    - "myopia"
+    - "other"
+  loss: "bce_with_logits"
+  threshold: 0.5
+
+feature_fusion:
+  enabled: true
+  measurement_vector_dim: 16
+  hidden_dim: 64
+

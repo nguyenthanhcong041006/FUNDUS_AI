@@ -1,0 +1,40 @@
+# Configuration for Anatomical and Lesion Segmentation
+
+training:
+  seed: 42
+  image_size: 512
+  batch_size: 4
+  epochs: 50
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  optimizer: "AdamW"
+  scheduler: "CosineAnnealingLR"
+  early_stopping_patience: 10
+  mixed_precision: true
+
+models:
+  optic_disc_cup:
+    architecture: "U-Net"
+    encoder: "resnet34"
+    encoder_weights: "imagenet"
+    num_classes: 2 # 0: Background, 1: Optic Disc, 2: Optic Cup (multiclass or 2-channel)
+    loss: "dice_bce"
+    weights_path: "checkpoints/optic_disc/best_od_oc_model.pth"
+
+  vessels:
+    architecture: "U-Net"
+    encoder: "resnet34"
+    encoder_weights: "imagenet"
+    in_channels: 3 # RGB or Green + CLAHE + original
+    num_classes: 1 # Binary vessel mask
+    loss: "dice_bce"
+    weights_path: "checkpoints/vessels/best_vessel_model.pth"
+
+  lesions:
+    architecture: "Attention_UNet"
+    encoder: "resnet34"
+    num_classes: 4 # Microaneurysms, Hemorrhages, Hard Exudates, Soft Exudates
+    loss: "focal_dice"
+    weights_path: "checkpoints/lesions/best_lesion_model.pth"
+    patch_size: 256 # For high-resolution microaneurysm processing
+

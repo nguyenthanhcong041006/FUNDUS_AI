@@ -1,0 +1,43 @@
+# Configuration for Retinal Fundus Preprocessing & Quality Assessment
+
+input:
+  default_size: 512
+  allowed_extensions:
+    - ".png"
+    - ".jpg"
+    - ".jpeg"
+    - ".tif"
+    - ".tiff"
+    - ".bmp"
+
+quality_assessment:
+  # Variance of Laplacian for blur estimation
+  blur_threshold: 80.0
+  # Mean intensity thresholds for brightness
+  min_brightness: 25.0
+  max_brightness: 235.0
+  # Standard deviation for contrast
+  min_contrast: 20.0
+  # Retinal FOV pixel ratio required
+  min_fov_ratio: 0.20
+  # Statuses: gradable, review_required, ungradable
+  auto_reject_ungradable: false
+
+fov_detection:
+  method: "threshold_otsu" # options: threshold_otsu, adaptive, fixed_threshold
+  fixed_threshold_value: 15
+  morph_kernel_size: 15
+  min_contour_area_ratio: 0.15
+
+enhancement:
+  clahe:
+    clip_limit: 2.0
+    tile_grid_size: [8, 8]
+  gaussian_blur:
+    kernel_size: [3, 3]
+    sigma: 0.0
+
+normalization:
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+

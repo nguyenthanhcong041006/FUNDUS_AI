@@ -1,0 +1,41 @@
+# Configuration for Evaluation, Visualization and Reporting
+
+metrics:
+  segmentation:
+    - "dice"
+    - "iou"
+    - "precision"
+    - "recall"
+    - "specificity"
+  classification:
+    - "accuracy"
+    - "per_class_f1"
+    - "roc_auc"
+    - "pr_auc"
+    - "confusion_matrix"
+  localization:
+    - "euclidean_distance"
+    - "success_rate_at_tolerance_px"
+    tolerance_px: 15
+
+visualization:
+  overlay_alpha: 0.45
+  colors:
+    optic_disc: [255, 0, 0]      # Blue in BGR: (255, 0, 0)
+    optic_cup: [0, 255, 0]       # Green in BGR: (0, 255, 0)
+    vessels: [0, 0, 255]         # Red in BGR: (0, 0, 255)
+    fovea: [0, 255, 255]         # Yellow in BGR: (0, 255, 255)
+    macula_region: [255, 255, 0] # Cyan in BGR: (255, 255, 0)
+    microaneurysms: [0, 0, 255]  # Red in BGR
+    hemorrhages: [0, 165, 255]   # Orange in BGR: (0, 165, 255)
+    hard_exudates: [0, 255, 255] # Yellow in BGR
+    cotton_wool: [255, 255, 255] # White in BGR
+    drusen: [144, 238, 144]      # Light green in BGR
+
+reporting:
+  export_formats:
+    - "json"
+    - "csv"
+    - "annotated_image"
+  include_provenance: true
+

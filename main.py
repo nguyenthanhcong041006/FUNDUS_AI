@@ -319,15 +319,127 @@ def run_pipeline(
     return full_report
 
 
+DATASET_DIRS = {
+    "drive": "datasets/raw/drive/training/images",
+    "aptos": "datasets/raw/aptos/train_images",
+    "idrid": "datasets/raw/idrid/A. Segmentation/1. Original Images/a. Training Set",
+    "odir": "datasets/raw/odir/ODIR-5K_Training_Dataset",
+    "rite": "datasets/raw/rite/training/images",
+    "drishti": "datasets/raw/Drishti-GS1/Drishti-GS1_files/Training/Images",
+    "papila": "datasets/raw/PAPILA/FundusImages",
+}
+
+VALID_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
+
+
+def run_batch(
+    image_paths: list[Path],
+    output_root: str = "outputs/batch_run",
+    target_size: int = 512
+):
+    """Executes the pipeline on a list of images and exports a summary CSV."""
+    out_root = Path(output_root)
+    out_root.mkdir(parents=True, exist_ok=True)
+    summary_records = []
+
+    print(f"\n=======================================================")
+    print(f"[*] Running FUNDUS AI Batch Processing on {len(image_paths)} images...")
+    print(f"=======================================================\n")
+
+    for idx, img_path in enumerate(image_paths, 1):
+        img_out_dir = out_root / img_path.stem
+        print(f"[{idx}/{len(image_paths)}] Processing: {img_path.name}")
+        try:
+            report = run_pipeline(
+                image_path=str(img_path),
+                output_dir=str(img_out_dir),
+                target_size=target_size,
+                use_synthetic_demo=False
+            )
+            summary_records.append({
+                "image_name": img_path.name,
+                "dataset": img_path.parent.parent.name if "raw" in str(img_path) else "custom",
+                "quality_status": report["quality"]["status"],
+                "blur_score": report["quality"]["blur_score"],
+                "fov_coverage_ratio": report["quality"]["fov_coverage_ratio"],
+                "disc_area_px2": report["anatomical_structures"]["optic_disc"]["area_px2"],
+                "vertical_cdr": report["anatomical_structures"]["optic_cup"]["vertical_cdr"],
+                "vessel_density_percent": report["anatomical_structures"]["blood_vessels"]["density_percent"],
+                "vessel_length_px": report["anatomical_structures"]["blood_vessels"]["total_length_px"],
+                "disc_fovea_distance_px": report["anatomical_structures"]["fovea"]["disc_fovea_distance_px"],
+                "dr_grade": report["disease_predictions"]["diabetic_retinopathy"]["grade"],
+                "dr_label": report["disease_predictions"]["diabetic_retinopathy"]["grade_label"],
+                "glaucoma_risk": report["disease_predictions"]["glaucoma"]["risk_score"],
+                "screening_status": report["screening_status"]
+            })
+        except Exception as e:
+            print(f"  [ERROR] Failed processing {img_path.name}: {e}")
+
+    if summary_records:
+        df_summary = pd.DataFrame(summary_records)
+        summary_csv_path = out_root / "batch_summary.csv"
+        df_summary.to_csv(summary_csv_path, index=False)
+        print(f"\n[OK] Batch run finished! Consolidated summary saved to:")
+        print(f"     {summary_csv_path.resolve()}\n")
+        print(df_summary[["image_name", "quality_status", "vertical_cdr", "vessel_density_percent", "dr_label", "screening_status"]].to_string())
+
+
 def main():
     parser = argparse.ArgumentParser(description="FUNDUS AI Complete Retinal Analysis Pipeline")
-    parser.add_argument("--image", type=str, default=None, help="Path to retinal fundus image")
+    parser.add_argument("--image", type=str, default=None, help="Path to a single retinal fundus image")
+    parser.add_argument("--input_dir", type=str, default=None, help="Path to directory containing images")
+    parser.add_argument("--dataset", type=str, default=None, choices=["drive", "aptos", "idrid", "odir", "rite", "drishti", "papila", "all"],
+                        help="Dataset shortcut name to automatically select images from datasets/raw")
+    parser.add_argument("--limit", type=int, default=None, help="Maximum number of images to process (e.g. 3 or 5)")
     parser.add_argument("--output_dir", type=str, default="outputs/sample_001", help="Output directory")
     parser.add_argument("--target_size", type=int, default=512, help="Target processing square resolution")
     parser.add_argument("--demo", action="store_true", help="Run with synthetic fundus demo image")
 
     args = parser.parse_args()
 
+    # Batch mode via dataset shortcut
+    if args.dataset:
+        selected_images = []
+        if args.dataset == "all":
+            for d_name, d_path in DATASET_DIRS.items():
+                p = Path(d_path)
+                if p.exists():
+                    imgs = [f for f in p.glob("*") if f.suffix.lower() in VALID_IMAGE_EXTENSIONS]
+                    take = args.limit if args.limit else 2
+                    selected_images.extend(imgs[:take])
+        else:
+            p = Path(DATASET_DIRS[args.dataset])
+            if p.exists():
+                imgs = [f for f in p.glob("*") if f.suffix.lower() in VALID_IMAGE_EXTENSIONS]
+                limit = args.limit if args.limit else 5
+                selected_images = imgs[:limit]
+            else:
+                print(f"[!] Dataset folder not found: {p}")
+                return
+
+        if not selected_images:
+            print("[!] No valid images found in the specified dataset directory.")
+            return
+
+        run_batch(selected_images, output_root=args.output_dir, target_size=args.target_size)
+        return
+
+    # Batch mode via folder path
+    if args.input_dir:
+        folder = Path(args.input_dir)
+        if not folder.exists():
+            print(f"[!] Input directory not found: {folder}")
+            return
+        imgs = [f for f in folder.glob("*") if f.suffix.lower() in VALID_IMAGE_EXTENSIONS]
+        if args.limit:
+            imgs = imgs[:args.limit]
+        if not imgs:
+            print("[!] No images found matching supported extensions.")
+            return
+        run_batch(imgs, output_root=args.output_dir, target_size=args.target_size)
+        return
+
+    # Single image or demo mode
     use_demo = args.demo or (args.image is None)
     run_pipeline(
         image_path=args.image,
@@ -339,4 +451,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

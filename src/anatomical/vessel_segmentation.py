@@ -1,5 +1,6 @@
 """Blood vessel segmentation and vessel tree extraction."""
 
+from pathlib import Path
 from typing import Dict, Any, Tuple, Optional
 import cv2
 import numpy as np
@@ -8,10 +9,24 @@ import numpy as np
 class VesselSegmenter:
     """Segments retinal blood vessels using deep learning or adaptive morphological filters."""
 
-    def __init__(self, model_path: Optional[str] = None, threshold: float = 0.5):
+    def __init__(self, model_path: Optional[str] = "checkpoints/vessels/best_vessel_model.pth", threshold: float = 0.5):
         self.model_path = model_path
         self.threshold = threshold
         self.model = None
+
+        if self.model_path and Path(self.model_path).exists():
+            try:
+                import torch
+                from src.models.unet import UNet
+                net = UNet(in_channels=3, num_classes=1)
+                state = torch.load(self.model_path, map_location="cpu")
+                net.load_state_dict(state)
+                net.eval()
+                self.model = net
+                print(f"     [U-Net Model Active] Loaded vessel checkpoint: {self.model_path}")
+            except Exception as e:
+                print(f"     [U-Net Load Warning] Falling back to morphology: {e}")
+                self.model = None
 
     def segment(
         self,
@@ -31,32 +46,30 @@ class VesselSegmenter:
         h, w = image_bgr.shape[:2]
 
         if self.model is not None:
-            # Model inference placeholder
-            vessel_mask = np.zeros((h, w), dtype=np.uint8)
+            # Deep Learning U-Net Inference
+            import torch
+            rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+            tensor = torch.from_numpy(rgb.transpose(2, 0, 1)).unsqueeze(0).float()
+
+            with torch.no_grad():
+                logits = self.model(tensor)
+                probs = torch.sigmoid(logits).squeeze().cpu().numpy()
+
+            vessel_mask = (probs > self.threshold).astype(np.uint8) * 255
         else:
             # High-performance classical vessel enhancement fallback:
-            # Green channel + CLAHE + Top-hat / Morphological opening
             green = image_bgr[:, :, 1]
             clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
             enhanced = clahe.apply(green)
-
-            # Invert: vessels are dark in green channel, so invert makes them bright
             inv = 255 - enhanced
-
-            # Top-hat morphological operation with disc elements
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
             tophat = cv2.morphologyEx(inv, cv2.MORPH_TOPHAT, kernel)
-
-            # Adaptive thresholding
             thresh = cv2.adaptiveThreshold(
                 tophat, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                 cv2.THRESH_BINARY, 15, -2
             )
-
-            # Clean small isolated noise dots
             clean_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
             cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, clean_kernel)
-
             vessel_mask = cleaned
 
         # Mask out anything outside the FOV

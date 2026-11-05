@@ -1,9 +1,11 @@
-"""Neural network architectures for FUNDUS AI."""
+"""Neural network architectures and loss functions for FUNDUS AI."""
 
 from .unet import UNet, build_unet
 from .attention_unet import AttentionUNet
 from .efficientnet import FundusClassifier, build_classifier
+from .densenet import FundusMultiLabelDenseNet
 from .fusion_model import FundusFusionModel
+from .losses import DiceBCELoss, FocalLoss, MultiClassDiceCrossEntropyLoss
 
 __all__ = [
     "UNet",
@@ -11,6 +13,9 @@ __all__ = [
     "AttentionUNet",
     "FundusClassifier",
     "build_classifier",
+    "FundusMultiLabelDenseNet",
     "FundusFusionModel",
+    "DiceBCELoss",
+    "FocalLoss",
+    "MultiClassDiceCrossEntropyLoss",
 ]
-

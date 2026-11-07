@@ -85,8 +85,11 @@ def plot_segmentation_training_results(
             axes[2].grid(True, linestyle="--", alpha=0.6)
             axes[2].legend(fontsize=11)
         elif has_class_dices:
-            axes[2].plot(epochs, history["od_dice"], "g-o", linewidth=2, label="Optic Disc Dice")
-            axes[2].plot(epochs, history["cup_dice"], "m-s", linewidth=2, label="Optic Cup Dice")
+            is_av = "artery" in task_name.lower() or "rite" in dataset_name.lower()
+            label_1 = "Artery Dice" if is_av else "Optic Disc Dice"
+            label_2 = "Vein Dice" if is_av else "Optic Cup Dice"
+            axes[2].plot(epochs, history["od_dice"], "g-o", linewidth=2, label=label_1)
+            axes[2].plot(epochs, history["cup_dice"], "m-s", linewidth=2, label=label_2)
             axes[2].set_title("Individual Structure Dice", fontsize=13, fontweight="bold")
             axes[2].set_xlabel("Epoch", fontsize=11)
             axes[2].set_ylabel("Dice Score", fontsize=11)

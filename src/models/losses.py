@@ -101,3 +101,54 @@ class MultiChannelDiceBCELoss(nn.Module):
         return (self.bce_weight * bce_loss) + (self.dice_weight * dice_loss)
 
 
+class MultiChannelFocalDiceLoss(nn.Module):
+    """Per-channel Focal Loss + Per-channel Soft Dice Loss for multi-class retinal lesions.
+
+    Combines hard negative mining via Focal Loss (to heavily penalize false positive
+    vessels and background regions) with independent per-channel Soft Dice loss (to ensure
+    tiny microaneurysms and hemorrhages receive equitable gradient magnitude).
+    """
+
+    def __init__(
+        self,
+        focal_weight: float = 0.5,
+        dice_weight: float = 0.5,
+        gamma: float = 2.0,
+        alpha: float = 0.75,
+        smooth: float = 1e-6
+    ):
+        super().__init__()
+        self.focal_weight = focal_weight
+        self.dice_weight = dice_weight
+        self.gamma = gamma
+        self.alpha = alpha
+        self.smooth = smooth
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        num_channels = logits.size(1)
+        probs = torch.sigmoid(logits)
+
+        channel_losses = []
+        for c in range(num_channels):
+            l_c = logits[:, c]
+            p_c = probs[:, c]
+            t_c = targets[:, c]
+
+            # 1. Per-channel Focal Loss
+            bce = F.binary_cross_entropy_with_logits(l_c, t_c, reduction="none")
+            p_t = t_c * p_c + (1.0 - t_c) * (1.0 - p_c)
+            alpha_t = t_c * self.alpha + (1.0 - t_c) * (1.0 - self.alpha)
+            focal = (alpha_t * ((1.0 - p_t) ** self.gamma) * bce).mean()
+
+            # 2. Per-channel Soft Dice Loss
+            p_flat = p_c.reshape(-1)
+            t_flat = t_c.reshape(-1)
+            inter = (p_flat * t_flat).sum()
+            dice = (2.0 * inter + self.smooth) / (p_flat.sum() + t_flat.sum() + self.smooth)
+            dice_loss = 1.0 - dice
+
+            channel_losses.append((self.focal_weight * focal) + (self.dice_weight * dice_loss))
+
+        return sum(channel_losses) / max(num_channels, 1)
+
+

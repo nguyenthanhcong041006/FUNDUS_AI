@@ -99,25 +99,30 @@ def evaluate(model, data_loader, criterion, device, threshold: float = 0.5):
 
 
 def train_optic_disc_cup(
-    dataset_type: str = "refuge2",
+    dataset_type: str = "multi",
     train_manifest: str = "manifests/optic_disc_cup/refuge2_train.csv",
     val_manifest: str = "manifests/optic_disc_cup/refuge2_val.csv",
     test_manifest: str | None = None,
-    epochs: int = 15,
+    epochs: int = 25,
     batch_size: int = 4,
     lr: float = 3e-4,
     image_size: int = 512,
+    patience: int = 6,
     limit: int | None = None,
     use_augmentation: bool = True,
     output_checkpoint: str = "checkpoints/optic_disc_cup/best_od_oc_model.pth",
     plot_dir: str = "outputs/plots/optic_disc_cup"
 ):
+    if dataset_type == "mixed":
+        dataset_type = "multi"
+
     print("===================================================================")
     print(f"[*] FUNDUS AI - Training U-Net Optic Disc & Cup on mode: {dataset_type.upper()}")
     print(f"    Train manifest: {train_manifest}")
     print(f"    Val manifest:   {val_manifest}")
     print(f"    Test manifest:  {test_manifest}")
     print(f"    Epochs: {epochs} | Batch size: {batch_size} | Size: {image_size}x{image_size} | LR: {lr}")
+    print(f"    Early stopping patience: {patience} epochs | Augmentation: {use_augmentation}")
     print(f"    Plots output:   {plot_dir}")
     print("===================================================================\n")
 
@@ -164,6 +169,9 @@ def train_optic_disc_cup(
     best_val_dice = 0.0
     out_path = Path(output_checkpoint)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    best_val_dice = 0.0
+    best_epoch = 0
+    patience_counter = 0
 
     # History dictionary for tracking metrics and plotting (includes val_loss!)
     history = {
@@ -214,11 +222,19 @@ def train_optic_disc_cup(
         # Checkpoint selection strictly based on validation performance
         if val_res["mean_dice"] > best_val_dice:
             best_val_dice = val_res["mean_dice"]
+            best_epoch = epoch
+            patience_counter = 0
             torch.save(model.state_dict(), str(out_path))
             print(f"  [+] Saved new best model checkpoint to: {out_path} (Val Mean Dice: {best_val_dice:.4f})")
+        else:
+            patience_counter += 1
+            print(f"  [-] Val Mean Dice did not improve. Early stopping counter: {patience_counter}/{patience}")
+            if patience_counter >= patience:
+                print(f"\n[!] Early stopping triggered at epoch {epoch}. Best epoch was Epoch {best_epoch} with Val Mean Dice: {best_val_dice:.4f}")
+                break
 
-    print(f"\n[OK] Training & Validation complete!")
-    print(f"     Best Checkpoint saved to: {out_path} (Best Val Mean Dice: {best_val_dice:.4f})")
+    print(f"\n[OK] Training & Validation complete! Best Val Mean Dice: {best_val_dice:.4f} (at Epoch {best_epoch})")
+    print(f"     Best Checkpoint saved to: {out_path.resolve()}")
 
     # Reload best checkpoint for plotting and external evaluation
     if out_path.is_file():
@@ -256,14 +272,15 @@ def train_optic_disc_cup(
 
 def main():
     parser = argparse.ArgumentParser(description="Train U-Net on Optic Disc & Cup (REFUGE2 / Drishti-GS1 / Multi-Domain)")
-    parser.add_argument("--dataset", type=str, choices=["refuge2", "drishti", "multi"], default="refuge2", help="Target dataset mode")
+    parser.add_argument("--dataset", type=str, choices=["refuge2", "drishti", "multi", "mixed"], default="multi", help="Target dataset mode")
     parser.add_argument("--train_manifest", type=str, default="manifests/optic_disc_cup/refuge2_train.csv")
     parser.add_argument("--val_manifest", type=str, default="manifests/optic_disc_cup/refuge2_val.csv")
     parser.add_argument("--test_manifest", type=str, default=None)
-    parser.add_argument("--epochs", type=int, default=15)
+    parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--image_size", type=int, default=512)
+    parser.add_argument("--patience", type=int, default=6, help="Early stopping patience in epochs")
     parser.add_argument("--no_aug", action="store_true", help="Disable data augmentation")
     parser.add_argument("--limit", type=int, default=None, help="Limit samples for dry run")
     parser.add_argument("--output_checkpoint", type=str, default="checkpoints/optic_disc_cup/best_od_oc_model.pth")
@@ -299,6 +316,7 @@ def main():
             batch_size=args.batch_size,
             lr=args.lr,
             image_size=args.image_size,
+            patience=args.patience,
             limit=args.limit,
             use_augmentation=not args.no_aug,
             output_checkpoint=args.output_checkpoint,

@@ -5,7 +5,13 @@ from .attention_unet import AttentionUNet
 from .efficientnet import FundusClassifier, build_classifier
 from .densenet import FundusMultiLabelDenseNet
 from .fusion_model import FundusFusionModel
-from .losses import DiceBCELoss, FocalLoss, MultiClassDiceCrossEntropyLoss
+from .losses import (
+    DiceBCELoss,
+    FocalLoss,
+    MultiClassDiceCrossEntropyLoss,
+    MultiChannelDiceBCELoss,
+    MultiChannelFocalDiceLoss
+)
 
 __all__ = [
     "UNet",
@@ -18,4 +24,6 @@ __all__ = [
     "DiceBCELoss",
     "FocalLoss",
     "MultiClassDiceCrossEntropyLoss",
+    "MultiChannelDiceBCELoss",
+    "MultiChannelFocalDiceLoss",
 ]

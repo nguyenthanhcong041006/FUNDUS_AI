@@ -1,0 +1,88 @@
+{
+  "image_id": "000c1434d8d7.png",
+  "quality": {
+    "status": "review_required",
+    "blur_score": 92.55,
+    "mean_brightness": 68.34,
+    "contrast_std": 13.11,
+    "fov_coverage_ratio": 0.495,
+    "underexposed_ratio": 0.0001,
+    "overexposed_ratio": 0.0,
+    "warnings": [
+      "Low image contrast"
+    ],
+    "is_gradable": false
+  },
+  "anatomical_structures": {
+    "optic_disc": {
+      "area_px2": 3132.0,
+      "horizontal_diameter_px": 85.0,
+      "vertical_diameter_px": 92.0
+    },
+    "optic_cup": {
+      "area_px2": 1480.0,
+      "horizontal_diameter_px": 66.0,
+      "vertical_diameter_px": 73.0,
+      "vertical_cdr": 0.793,
+      "horizontal_cdr": 0.776,
+      "cup_disc_area_ratio": 0.473
+    },
+    "fovea": {
+      "x": 425,
+      "y": 188,
+      "disc_fovea_distance_px": 263.9
+    },
+    "blood_vessels": {
+      "density_percent": 2.11,
+      "total_length_px": 1181,
+      "estimated_mean_width_px": 2.31,
+      "branch_point_count": 701
+    }
+  },
+  "lesions": [
+    {
+      "type": "hard_exudate",
+      "count": 3,
+      "total_area_px2": 66.0,
+      "area_ratio_percent": 0.0509
+    }
+  ],
+  "spatial_distribution": {
+    "disc_fovea_distance_px": 263.9,
+    "macular_involvement": false,
+    "quadrant_lesion_pixels": {
+      "superior_temporal": 0,
+      "superior_nasal": 2,
+      "inferior_temporal": 0,
+      "inferior_nasal": 64
+    },
+    "coordinate_origin": "fovea"
+  },
+  "disease_predictions": {
+    "diabetic_retinopathy": {
+      "grade": 1,
+      "grade_label": "Mild NPDR",
+      "confidence": 0.65
+    },
+    "glaucoma": {
+      "risk_score": 0.78,
+      "risk_level": "elevated_suspicion"
+    },
+    "hypertensive_retinopathy": {
+      "risk_score": 0.15,
+      "risk_level": "normal_limits"
+    },
+    "amd": {
+      "risk_score": 0.08,
+      "risk_level": "low_suspicion"
+    }
+  },
+  "screening_status": "urgent_referral",
+  "clinical_disclaimer": "Research prototype output only. Not for standalone clinical diagnosis. Any positive or borderline screening flag requires examination by a licensed ophthalmologist.",
+  "model_versions": {
+    "vessel": "v1.0",
+    "optic_disc_cup": "v1.0",
+    "lesion": "v1.0",
+    "classifier": "v1.0"
+  }
+}

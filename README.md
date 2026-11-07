@@ -36,6 +36,7 @@ Fundus Image ──► Quality Assessment (Blur, Brightness, Contrast, FOV)
 eyes/
 ├── datasets/                     # Thư mục chứa các bộ dữ liệu đáy mắt
 │   └── raw/                      # Dữ liệu ảnh và nhãn gốc (Datasets hiện có)
+│       ├── REFUGE2/              # [M1] Optic Disc & Cup + Glaucoma (1.200 ảnh: Train 400, Val 400, Test 400)
 │       ├── Drishti-GS1/          # [M1] Optic Disc & Cup (101 ảnh: 50 train, 51 test, SoftMaps, CDR ref)
 │       ├── PAPILA/               # [M1] External Validation Glaucoma & OD/OC (488 ảnh, 244 bệnh nhân)
 │       ├── drive/                # [M2] Retinal Blood Vessel Segmentation (40 ảnh: 20 train, 20 test)
@@ -44,7 +45,7 @@ eyes/
 │       ├── aptos/                # [M5] DR Severity 5-Grade Classification (3.662 ảnh train)
 │       └── odir/                 # [M6] Multi-Disease 8-Class Classification (3.500 bệnh nhân ODIR-5K)
 ├── manifests/                    # Danh sách CSV chuẩn hóa quản lý đường dẫn tương đối (Relative POSIX)
-│   ├── optic_disc_cup/           # drishti_train.csv, drishti_test.csv, papila_external_test.csv
+│   ├── optic_disc_cup/           # refuge2_train/val/test/all.csv, drishti_train/test.csv, papila_external_test.csv
 │   ├── vessel/                   # drive_train.csv, drive_test.csv
 │   ├── artery_vein/              # rite_train.csv, rite_test.csv
 │   ├── dr_lesions/               # idrid_lesions_train.csv, idrid_lesions_test.csv
@@ -249,7 +250,7 @@ python src/datasets/build_manifests.py
 ```
 
 * **Kết quả tạo ra trong `manifests/`:**
-  * `optic_disc_cup/`: `drishti_train.csv` (50 ảnh), `drishti_test.csv` (51 ảnh), `papila_external_test.csv` (488 ảnh).
+  * `optic_disc_cup/`: `refuge2_train.csv` (400 ảnh), `refuge2_val.csv` (400 ảnh), `refuge2_test.csv` (400 ảnh), `refuge2_all.csv` (1.200 ảnh), `drishti_train.csv` (50 ảnh), `drishti_test.csv` (51 ảnh), `papila_external_test.csv` (488 ảnh).
   * `vessel/`: `drive_train.csv` (20 ảnh), `drive_test.csv` (20 ảnh).
   * `artery_vein/`: `rite_train.csv` (20 ảnh), `rite_test.csv` (20 ảnh).
   * `dr_lesions/`: `idrid_lesions_train.csv` (54 ảnh), `idrid_lesions_test.csv` (27 ảnh).
@@ -274,16 +275,25 @@ python src/evaluation/evaluate_vessels.py --checkpoint checkpoints/vessels/best_
 * **Checkpoint:** `checkpoints/vessels/best_vessel_model.pth`.
 * **Kết quả chi tiết:** `outputs/vessel_evaluation_results.csv`.
 
-#### 1.2 Phân đoạn Đĩa thị & Hõm gai thị (Module M1 — U-Net trên Drishti-GS1 & PAPILA)
-* **Nguyên tắc:** **Drishti-GS1** là tập huấn luyện chính và đánh giá nội bộ (Internal Validation). **PAPILA** (488 ảnh) dùng làm kiểm định ngoại vi độc lập (External Validation) đánh giá khả năng tổng quát hóa và đo đạc vCDR sàng lọc Glaucoma.
+#### 1.2 Phân đoạn Đĩa thị & Hõm gai thị (Module M1 — U-Net trên REFUGE2, Drishti-GS1 & PAPILA)
+* **Nguyên tắc:** 
+  * **REFUGE2** (1.200 ảnh: Train 400, Val 400, Test 400) là tập huấn luyện và đánh giá chính quy mô lớn chuẩn MICCAI.
+  * **Drishti-GS1** (101 ảnh) và **PAPILA** (488 ảnh) dùng làm tập kiểm thử ngoại vi độc lập (External Validation) đánh giá khả năng tổng quát hóa trên các dòng máy chụp khác nhau.
 ```powershell
-# Huấn luyện U-Net 2 kênh (Channel 0: Optic Disc, Channel 1: Optic Cup) trên Drishti-GS1:
-python src/training/train_optic_disc_cup.py --epochs 20 --batch_size 2 --image_size 512
+# 1. Huấn luyện U-Net 2 kênh (Channel 0: Optic Disc, Channel 1: Optic Cup) trên REFUGE2 (Mặc định):
+python src/training/train_optic_disc_cup.py --dataset refuge2 --epochs 20 --batch_size 4 --image_size 512
 
-# Đánh giá toàn diện cả Internal Test (Drishti-GS1) và External Validation (PAPILA):
+# Hoặc huấn luyện trên Drishti-GS1 nếu muốn benchmark quy mô nhỏ:
+python src/training/train_optic_disc_cup.py --dataset drishti --epochs 20 --batch_size 2 --image_size 512
+
+# 2. Đánh giá External Validation chéo trên Drishti-GS1 test set:
+python src/training/train_optic_disc_cup.py --eval_only --test_manifest manifests/optic_disc_cup/drishti_test.csv --image_size 512
+
+# 3. Đánh giá toàn diện cả Internal Test và External Validation (PAPILA):
 python src/evaluation/evaluate_optic_disc_cup.py --image_size 512
 ```
 * **Checkpoint:** `checkpoints/optic_disc_cup/best_od_oc_model.pth`.
+* **Biểu đồ & Analytics:** `outputs/plots/optic_disc_cup/refuge2_training_curves.png`, `refuge2_sample_predictions.png`, `refuge2_training_history.csv`.
 * **Kết quả chi tiết:** `outputs/optic_disc_cup_internal_evaluation.csv` & `outputs/optic_disc_cup_external_evaluation.csv`.
 
 #### 1.3 Phân biệt Động mạch / Tĩnh mạch (Module M3 — U-Net 3-Class trên RITE)

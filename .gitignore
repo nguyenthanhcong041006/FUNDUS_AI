@@ -62,6 +62,8 @@ outputs/reports/*
 !outputs/reports/.gitkeep
 outputs/logs/*
 !outputs/logs/.gitkeep
+outputs/plots/*
+!outputs/plots/.gitkeep
 
 # Logs and Tensorboard
 runs/

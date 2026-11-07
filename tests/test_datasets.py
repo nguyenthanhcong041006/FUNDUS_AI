@@ -7,7 +7,7 @@ from src.datasets.rite_dataset import RITEManifestDataset
 from src.datasets.idrid_dataset import IDRiDLesionDataset
 from src.datasets.aptos_dataset import APTOSDataset
 from src.datasets.odir_dataset import ODIRDataset
-from src.datasets.optic_disc_cup_dataset import DrishtiDataset, PAPILADataset
+from src.datasets.optic_disc_cup_dataset import DrishtiDataset, PAPILADataset, REFUGE2Dataset
 
 
 def test_drive_manifest_dataset():
@@ -70,4 +70,18 @@ def test_papila_dataset():
     assert item["mask"].shape == (2, 128, 128)  # 2 channels: OD and Cup
     assert "diagnosis" in item
     assert item["patient_id"] != ""
+
+
+def test_refuge2_dataset():
+    ds = REFUGE2Dataset(manifest_path="manifests/optic_disc_cup/refuge2_train.csv", image_size=128, limit=2)
+    assert len(ds) == 2
+    item = ds[0]
+    assert item["image"].shape == (3, 128, 128)
+    assert item["mask"].shape == (2, 128, 128)  # 2 channels: OD and Cup
+    assert "cdr_ref" in item
+    assert "diagnosis" in item
+    assert "fovea" in item
+    assert item["fovea"].shape == (2,)
+    assert item["image_id"] != ""
+
 

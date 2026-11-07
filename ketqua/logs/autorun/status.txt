@@ -1,0 +1,17 @@
+started 11/07/2026 01:45:48
+waiting for PID 3308
+[2026-11-07T02:48:10] START m1_refuge2_train
+[2026-11-07T03:35:39] END   m1_refuge2_train exit=0
+[2026-11-07T03:35:39] START m6_odir_train
+[2026-11-07T06:43:59] END   m6_odir_train exit=0
+[2026-11-07T06:43:59] START m1_refuge2_test
+[2026-11-07T06:44:36] END   m1_refuge2_test exit=0
+[2026-11-07T06:44:36] START m1_drishti_papila
+[2026-11-07T06:45:47] END   m1_drishti_papila exit=0
+[2026-11-07T06:45:47] START m2_vessels_eval
+[2026-11-07T06:45:53] END   m2_vessels_eval exit=0
+[2026-11-07T06:45:53] START pytest
+[2026-11-07T06:46:01] END   pytest exit=0
+[2026-11-07T06:46:01] START pipeline_all
+[2026-11-07T06:46:37] END   pipeline_all exit=0
+ALL_DONE 11/07/2026 06:46:37

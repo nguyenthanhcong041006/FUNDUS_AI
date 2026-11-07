@@ -80,6 +80,91 @@ def resize_and_pad(
     return padded, transform_meta
 
 
+def letterbox_rgb(
+    image: np.ndarray,
+    target_size: int = 512,
+    interpolation: int = cv2.INTER_LINEAR
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Convenience letterbox function for RGB/BGR fundus images."""
+    return resize_and_pad(
+        image=image,
+        target_size=target_size,
+        interpolation=interpolation,
+        preserve_aspect_ratio=True
+    )
+
+
+def letterbox_mask(
+    mask: np.ndarray,
+    target_size: int = 512,
+    pad_meta: Optional[Dict[str, Any]] = None
+) -> np.ndarray:
+    """Applies exact aspect-ratio preserving letterbox padding to binary or multi-class masks.
+    
+    Supports 2D (H, W), 3D channel-first (C, H, W), or 3D channel-last (H, W, C).
+    Guarantees NEAREST neighbor interpolation to prevent class bleeding.
+    """
+    if pad_meta is None:
+        if mask.ndim == 2:
+            _, pad_meta = resize_and_pad(mask, target_size=target_size, preserve_aspect_ratio=True)
+        elif mask.ndim == 3 and mask.shape[0] < mask.shape[2]:  # (C, H, W)
+            dummy = np.zeros((mask.shape[1], mask.shape[2]), dtype=np.uint8)
+            _, pad_meta = resize_and_pad(dummy, target_size=target_size, preserve_aspect_ratio=True)
+        else:
+            _, pad_meta = resize_and_pad(mask[:, :, 0], target_size=target_size, preserve_aspect_ratio=True)
+
+    pad_top = pad_meta["pad_top"]
+    pad_bottom = pad_meta["pad_bottom"]
+    pad_left = pad_meta["pad_left"]
+    pad_right = pad_meta["pad_right"]
+    new_w = target_size - (pad_left + pad_right)
+    new_h = target_size - (pad_top + pad_bottom)
+
+    if mask.ndim == 2:
+        resized = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+        padded = cv2.copyMakeBorder(
+            resized, pad_top, pad_bottom, pad_left, pad_right,
+            cv2.BORDER_CONSTANT, value=0
+        )
+        return padded
+    elif mask.ndim == 3 and mask.shape[0] < mask.shape[2]:  # (C, H, W)
+        channels = []
+        for c in range(mask.shape[0]):
+            ch = mask[c]
+            r = cv2.resize(ch, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+            p = cv2.copyMakeBorder(
+                r, pad_top, pad_bottom, pad_left, pad_right,
+                cv2.BORDER_CONSTANT, value=0
+            )
+            channels.append(p)
+        return np.stack(channels, axis=0)
+    else:  # (H, W, C)
+        channels = []
+        for c in range(mask.shape[2]):
+            ch = mask[:, :, c]
+            r = cv2.resize(ch, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+            p = cv2.copyMakeBorder(
+                r, pad_top, pad_bottom, pad_left, pad_right,
+                cv2.BORDER_CONSTANT, value=0
+            )
+            channels.append(p)
+        return np.stack(channels, axis=2)
+
+
+def unpad_mask(
+    padded_mask: np.ndarray,
+    pad_meta: Dict[str, Any]
+) -> np.ndarray:
+    """Restores a padded mask back to its original image dimensions."""
+    if padded_mask.ndim == 3 and padded_mask.shape[0] < padded_mask.shape[2]:
+        # (C, H, W) -> unpad channel by channel
+        unpadded = []
+        for c in range(padded_mask.shape[0]):
+            unpadded.append(unpad_and_restore(padded_mask[c], pad_meta, interpolation=cv2.INTER_NEAREST))
+        return np.stack(unpadded, axis=0)
+    return unpad_and_restore(padded_mask, pad_meta, interpolation=cv2.INTER_NEAREST)
+
+
 def unpad_and_restore(
     mask_or_image: np.ndarray,
     transform_meta: Dict[str, Any],

@@ -46,16 +46,19 @@ class VesselSegmenter:
         h, w = image_bgr.shape[:2]
 
         if self.model is not None:
-            # Deep Learning U-Net Inference
+            # Deep Learning U-Net Inference with letterbox
             import torch
-            rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-            tensor = torch.from_numpy(rgb.transpose(2, 0, 1)).unsqueeze(0).float()
+            from src.preprocessing.normalization import letterbox_rgb, unpad_mask
+            rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+            img_lb, pad_meta = letterbox_rgb(rgb, target_size=512)
+            tensor = torch.from_numpy(img_lb.astype(np.float32).transpose(2, 0, 1) / 255.0).unsqueeze(0).float()
 
             with torch.no_grad():
                 logits = self.model(tensor)
                 probs = torch.sigmoid(logits).squeeze().cpu().numpy()
 
-            vessel_mask = (probs > self.threshold).astype(np.uint8) * 255
+            vessel_512 = (probs > self.threshold).astype(np.uint8) * 255
+            vessel_mask = unpad_mask(vessel_512, pad_meta)
         else:
             # High-performance classical vessel enhancement fallback:
             green = image_bgr[:, :, 1]

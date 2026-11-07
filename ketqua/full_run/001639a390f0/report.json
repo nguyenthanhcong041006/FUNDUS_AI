@@ -1,0 +1,81 @@
+{
+  "image_id": "001639a390f0.png",
+  "quality": {
+    "status": "review_required",
+    "blur_score": 81.89,
+    "mean_brightness": 99.43,
+    "contrast_std": 8.95,
+    "fov_coverage_ratio": 0.4953,
+    "underexposed_ratio": 0.0001,
+    "overexposed_ratio": 0.0,
+    "warnings": [
+      "Low image contrast"
+    ],
+    "is_gradable": false
+  },
+  "anatomical_structures": {
+    "optic_disc": {
+      "area_px2": 0.0,
+      "horizontal_diameter_px": 0.0,
+      "vertical_diameter_px": 0.0
+    },
+    "optic_cup": {
+      "area_px2": 0.0,
+      "horizontal_diameter_px": 0.0,
+      "vertical_diameter_px": 0.0,
+      "vertical_cdr": 0.0,
+      "horizontal_cdr": 0.0,
+      "cup_disc_area_ratio": 0.0
+    },
+    "fovea": {
+      "x": 170,
+      "y": 256,
+      "disc_fovea_distance_px": 0.0
+    },
+    "blood_vessels": {
+      "density_percent": 1.78,
+      "total_length_px": 1111,
+      "estimated_mean_width_px": 2.08,
+      "branch_point_count": 695
+    }
+  },
+  "lesions": [],
+  "spatial_distribution": {
+    "disc_fovea_distance_px": 0.0,
+    "macular_involvement": false,
+    "quadrant_lesion_pixels": {
+      "superior_temporal": 0,
+      "superior_nasal": 0,
+      "inferior_temporal": 0,
+      "inferior_nasal": 0
+    },
+    "coordinate_origin": "fovea"
+  },
+  "disease_predictions": {
+    "diabetic_retinopathy": {
+      "grade": 0,
+      "grade_label": "No Apparent DR",
+      "confidence": 0.9
+    },
+    "glaucoma": {
+      "risk_score": 0.12,
+      "risk_level": "low_suspicion"
+    },
+    "hypertensive_retinopathy": {
+      "risk_score": 0.15,
+      "risk_level": "normal_limits"
+    },
+    "amd": {
+      "risk_score": 0.08,
+      "risk_level": "low_suspicion"
+    }
+  },
+  "screening_status": "no_apparent_abnormality",
+  "clinical_disclaimer": "Research prototype output only. Not for standalone clinical diagnosis. Any positive or borderline screening flag requires examination by a licensed ophthalmologist.",
+  "model_versions": {
+    "vessel": "v1.0",
+    "optic_disc_cup": "v1.0",
+    "lesion": "v1.0",
+    "classifier": "v1.0"
+  }
+}

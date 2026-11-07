@@ -1,10 +1,10 @@
-"""Glaucoma screening logic based on optic nerve head features."""
+"""Glaucoma screening logic based on optic nerve head features with fail-safe triage."""
 
 from typing import Dict, Any, Optional
 
 
 class GlaucomaScreener:
-    """Evaluates glaucoma risk indicators based on Vertical CDR and model outputs."""
+    """Evaluates glaucoma risk indicators based on Vertical CDR and anatomical features."""
 
     def __init__(self, model_path: Optional[str] = None, vcdr_threshold: float = 0.65):
         self.model_path = model_path
@@ -14,20 +14,55 @@ class GlaucomaScreener:
         self,
         od_oc_metrics: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Assesses glaucoma suspicion score.
+        """Assesses glaucoma suspicion score with fail-safe guards.
 
         Args:
             od_oc_metrics: Dict containing vertical_cdr and area_ratio.
 
         Returns:
-            Dict with glaucoma risk score, risk level, and rationale.
+            Dict with glaucoma risk score, risk level, status, and rationale.
         """
+        disc_metrics = od_oc_metrics.get("optic_disc", {})
         cup_metrics = od_oc_metrics.get("optic_cup", {})
-        vcdr = cup_metrics.get("vertical_cdr", 0.0)
-        area_ratio = cup_metrics.get("cup_disc_area_ratio", 0.0)
 
-        # Baseline rule-informed risk score
-        if vcdr >= self.vcdr_threshold or area_ratio >= 0.50:
+        disc_detected = disc_metrics.get("detected", disc_metrics.get("area_px2", 0) > 50)
+        vcdr = cup_metrics.get("vertical_cdr")
+        area_ratio = cup_metrics.get("cup_disc_area_ratio")
+        anatomical_violation = cup_metrics.get("anatomical_violation", False)
+
+        # Fail-Safe Guard 1: Disc not detected or ungradable
+        if not disc_detected or vcdr is None:
+            return {
+                "disease": "glaucoma",
+                "risk_score": None,
+                "risk_level": "requires_clinical_review",
+                "vertical_cdr": None,
+                "status": "disc_not_evaluable",
+                "rationale": (
+                    "Optic disc boundary could not be reliably segmented from this image. "
+                    "Automated CDR cannot be computed. Specialist manual review is required."
+                ),
+                "clinical_limitation": "A fundus photo alone cannot diagnose glaucoma. Visual field and IOP testing are required."
+            }
+
+        # Fail-Safe Guard 2: Anatomical violation (Cup larger than or outside Disc)
+        if anatomical_violation:
+            return {
+                "disease": "glaucoma",
+                "risk_score": 0.60,
+                "risk_level": "requires_clinical_review",
+                "vertical_cdr": vcdr,
+                "status": "anatomical_anomaly_detected",
+                "rationale": (
+                    f"Anatomical violation detected (optic cup exceeds optic disc boundary). "
+                    f"Computed vCDR ({vcdr:.2f}) may be unreliable. Ophthalmologist review recommended."
+                ),
+                "clinical_limitation": "A fundus photo alone cannot diagnose glaucoma. Visual field and IOP testing are required."
+            }
+
+        # Rule-informed risk scoring
+        area_val = area_ratio if area_ratio is not None else 0.0
+        if vcdr >= self.vcdr_threshold or area_val >= 0.50:
             risk_level = "elevated_suspicion"
             risk_score = 0.78
             rationale = (
@@ -48,7 +83,7 @@ class GlaucomaScreener:
             "risk_score": round(risk_score, 2),
             "risk_level": risk_level,
             "vertical_cdr": vcdr,
+            "status": "evaluable",
             "rationale": rationale,
             "clinical_limitation": "A fundus photo alone cannot diagnose glaucoma. Visual field and IOP testing are required."
         }
-

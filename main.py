@@ -327,6 +327,7 @@ DATASET_DIRS = {
     "rite": "datasets/raw/rite/training/images",
     "drishti": "datasets/raw/Drishti-GS1/Drishti-GS1_files/Training/Images",
     "papila": "datasets/raw/PAPILA/FundusImages",
+    "refuge": "datasets/raw/REFUGE2/Train/REFUGE1-val/REFUGE-Validation400",
 }
 
 VALID_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
@@ -347,8 +348,14 @@ def run_batch(
     print(f"=======================================================\n")
 
     for idx, img_path in enumerate(image_paths, 1):
-        img_out_dir = out_root / img_path.stem
-        print(f"[{idx}/{len(image_paths)}] Processing: {img_path.name}")
+        dataset_name = "custom"
+        for part in img_path.parts:
+            part_clean = part.lower().replace("-", "_")
+            if part_clean in ["drive", "aptos", "idrid", "odir", "rite", "drishti_gs1", "papila", "refuge2"]:
+                dataset_name = part_clean
+                break
+        img_out_dir = out_root / f"{dataset_name}_{img_path.stem}"
+        print(f"[{idx}/{len(image_paths)}] Processing ({dataset_name}): {img_path.name}")
         try:
             report = run_pipeline(
                 image_path=str(img_path),
@@ -358,7 +365,7 @@ def run_batch(
             )
             summary_records.append({
                 "image_name": img_path.name,
-                "dataset": img_path.parent.parent.name if "raw" in str(img_path) else "custom",
+                "dataset": dataset_name,
                 "quality_status": report["quality"]["status"],
                 "blur_score": report["quality"]["blur_score"],
                 "fov_coverage_ratio": report["quality"]["fov_coverage_ratio"],
@@ -388,7 +395,7 @@ def main():
     parser = argparse.ArgumentParser(description="FUNDUS AI Complete Retinal Analysis Pipeline")
     parser.add_argument("--image", type=str, default=None, help="Path to a single retinal fundus image")
     parser.add_argument("--input_dir", type=str, default=None, help="Path to directory containing images")
-    parser.add_argument("--dataset", type=str, default=None, choices=["drive", "aptos", "idrid", "odir", "rite", "drishti", "papila", "all"],
+    parser.add_argument("--dataset", type=str, default=None, choices=["drive", "aptos", "idrid", "odir", "rite", "drishti", "papila", "refuge", "all"],
                         help="Dataset shortcut name to automatically select images from datasets/raw")
     parser.add_argument("--limit", type=int, default=None, help="Maximum number of images to process (e.g. 3 or 5)")
     parser.add_argument("--output_dir", type=str, default="outputs/sample_001", help="Output directory")
@@ -401,16 +408,26 @@ def main():
     if args.dataset:
         selected_images = []
         if args.dataset == "all":
+            seen_filenames = set()
             for d_name, d_path in DATASET_DIRS.items():
+                if d_name == "rite":
+                    continue  # RITE shares raw images with DRIVE; avoid duplicate rows in batch summary
                 p = Path(d_path)
                 if p.exists():
-                    imgs = [f for f in p.glob("*") if f.suffix.lower() in VALID_IMAGE_EXTENSIONS]
+                    imgs = [f for f in sorted(p.glob("*")) if f.suffix.lower() in VALID_IMAGE_EXTENSIONS]
                     take = args.limit if args.limit else 2
-                    selected_images.extend(imgs[:take])
+                    added = 0
+                    for img in imgs:
+                        if img.name.lower() not in seen_filenames:
+                            seen_filenames.add(img.name.lower())
+                            selected_images.append(img)
+                            added += 1
+                            if added >= take:
+                                break
         else:
             p = Path(DATASET_DIRS[args.dataset])
             if p.exists():
-                imgs = [f for f in p.glob("*") if f.suffix.lower() in VALID_IMAGE_EXTENSIONS]
+                imgs = [f for f in sorted(p.glob("*")) if f.suffix.lower() in VALID_IMAGE_EXTENSIONS]
                 limit = args.limit if args.limit else 5
                 selected_images = imgs[:limit]
             else:

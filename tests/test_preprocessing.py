@@ -7,7 +7,14 @@ import pytest
 from src.preprocessing.quality_assessment import QualityAssessor
 from src.preprocessing.fov_detection import FOVDetector
 from src.preprocessing.enhancement import FundusEnhancer
-from src.preprocessing.normalization import resize_and_pad, unpad_and_restore, normalize_tensor
+from src.preprocessing.normalization import (
+    resize_and_pad,
+    unpad_and_restore,
+    normalize_tensor,
+    letterbox_rgb,
+    letterbox_mask,
+    unpad_mask
+)
 
 
 def test_quality_assessment():
@@ -59,3 +66,34 @@ def test_normalization():
     norm = normalize_tensor(padded)
     assert norm.dtype == np.float32
 
+
+def test_letterbox_and_unpad_aspect_ratio():
+    """Verify non-square aspect ratio image and mask letterboxing and restoration."""
+    # Non-square: 400x600 (height 400, width 600)
+    img = np.zeros((400, 600, 3), dtype=np.uint8)
+    cv2.circle(img, (300, 200), 50, (255, 255, 255), -1)
+
+    mask = np.zeros((400, 600), dtype=np.uint8)
+    cv2.circle(mask, (300, 200), 50, 1, -1)
+
+    # Letterbox RGB
+    img_lb, pad_meta = letterbox_rgb(img, target_size=512)
+    assert img_lb.shape == (512, 512, 3)
+
+    # Letterbox Mask
+    mask_lb = letterbox_mask(mask, target_size=512, pad_meta=pad_meta)
+    assert mask_lb.shape == (512, 512)
+    # Check that mask values are strictly binary (0 or 1)
+    assert set(np.unique(mask_lb)).issubset({0, 1})
+
+    # Unpad Mask back to (400, 600)
+    restored_mask = unpad_mask(mask_lb, pad_meta)
+    assert restored_mask.shape == (400, 600)
+    assert set(np.unique(restored_mask)).issubset({0, 1})
+
+    # Multi-channel mask (2, 400, 600)
+    masks_2ch = np.stack([mask, mask], axis=0)
+    masks_2ch_lb = letterbox_mask(masks_2ch, target_size=512, pad_meta=pad_meta)
+    assert masks_2ch_lb.shape == (2, 512, 512)
+    restored_2ch = unpad_mask(masks_2ch_lb, pad_meta)
+    assert restored_2ch.shape == (2, 400, 600)

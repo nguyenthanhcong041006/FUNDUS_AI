@@ -1,0 +1,14 @@
+{
+  "status": "review_required",
+  "blur_score": 74.06,
+  "mean_brightness": 74.13,
+  "contrast_std": 16.64,
+  "fov_coverage_ratio": 0.6065,
+  "underexposed_ratio": 0.0001,
+  "overexposed_ratio": 0.0,
+  "warnings": [
+    "Moderate blur detected",
+    "Low image contrast"
+  ],
+  "is_gradable": false
+}

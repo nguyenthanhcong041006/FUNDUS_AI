@@ -5,6 +5,8 @@ from .rite_dataset import RITEManifestDataset
 from .idrid_dataset import IDRiDLesionDataset
 from .aptos_dataset import APTOSDataset
 from .odir_dataset import ODIRDataset, ODIR_DISEASE_COLUMNS
+from .optic_disc_cup_dataset import DrishtiDataset, PAPILADataset, REFUGE2Dataset, MixedOpticDiscDataset
+from .transforms import JointFundusAugmentation
 
 __all__ = [
     "DRIVEManifestDataset",
@@ -13,5 +15,10 @@ __all__ = [
     "APTOSDataset",
     "ODIRDataset",
     "ODIR_DISEASE_COLUMNS",
+    "DrishtiDataset",
+    "PAPILADataset",
+    "REFUGE2Dataset",
+    "MixedOpticDiscDataset",
+    "JointFundusAugmentation",
 ]
 

@@ -33,14 +33,23 @@ class FoveaDetector:
         macula_mask = np.zeros((h, w), dtype=np.uint8)
 
         # Optic disc position
+        disc_is_detected = od_metrics.get("detected", False) if od_metrics else False
+        if not disc_is_detected and od_metrics and od_metrics.get("area_px2", 0) > 50:
+            disc_is_detected = True
+
         od_cx, od_cy = (w // 3, h // 2)
-        if od_metrics and od_metrics.get("detected", False):
-            od_cx, od_cy = od_metrics["centroid"]
+        if disc_is_detected and od_metrics:
+            if "centroid" in od_metrics:
+                od_cx, od_cy = od_metrics["centroid"]
+            elif "center" in od_metrics:
+                od_cx, od_cy = od_metrics["center"]
 
         # If OD is on the left half of image, fovea is temporally located to the right
         # If OD is on the right half, fovea is temporally located to the left
         expected_dir = 1 if od_cx < (w // 2) else -1
         disc_diam = od_metrics.get("horizontal_diameter_px", 80.0) if od_metrics else 80.0
+        if disc_diam <= 0:
+            disc_diam = 80.0
 
         # Estimated anatomical distance: ~2.5 disc diameters
         est_dist = int(disc_diam * 2.5)
@@ -62,8 +71,13 @@ class FoveaDetector:
         else:
             fovea_x, fovea_y = est_fx, est_fy
 
-        # Distance to optic disc
-        df_distance = float(math.sqrt((fovea_x - od_cx)**2 + (fovea_y - od_cy)**2))
+        # Distance to optic disc (valid only if optic disc was detected)
+        if disc_is_detected:
+            df_distance = round(float(math.sqrt((fovea_x - od_cx)**2 + (fovea_y - od_cy)**2)), 1)
+            od_coords = [int(od_cx), int(od_cy)]
+        else:
+            df_distance = None
+            od_coords = None
 
         # Macular zone mask (approx 1.5 disc diameters radius around fovea)
         macula_radius = int(disc_diam * 0.75)
@@ -73,8 +87,8 @@ class FoveaDetector:
 
         fovea_data = {
             "fovea_coordinates": [int(fovea_x), int(fovea_y)],
-            "optic_disc_coordinates": [int(od_cx), int(od_cy)],
-            "disc_fovea_distance_px": round(df_distance, 1),
+            "optic_disc_coordinates": od_coords,
+            "disc_fovea_distance_px": df_distance,
             "macula_radius_px": macula_radius,
             "detected": True
         }

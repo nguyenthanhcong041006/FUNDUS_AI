@@ -7,6 +7,7 @@ portability across environments (Windows/Linux/Colab/Kaggle).
 """
 
 from pathlib import Path
+from PIL import Image
 import pandas as pd
 import numpy as np
 
@@ -329,6 +330,173 @@ def build_papila_manifests(raw_root: Path, out_dir: Path):
     print(f"[+] PAPILA External Test: {len(df)} records -> {out_dir / 'papila_external_test.csv'}")
 
 
+def compute_mask_vcdr(mask_path: Path) -> float:
+    """Computes vertical CDR from a REFUGE BMP mask where 0=Cup, <=128=Disc."""
+    try:
+        arr = np.array(Image.open(mask_path))
+        od_y = np.where(arr <= 128)[0]
+        cup_y = np.where(arr == 0)[0]
+        if len(od_y) > 0 and len(cup_y) > 0:
+            v_od = od_y.max() - od_y.min() + 1
+            v_cup = cup_y.max() - cup_y.min() + 1
+            return round(float(v_cup / max(v_od, 1)), 4)
+    except Exception:
+        pass
+    return 0.0
+
+
+def build_refuge2_manifests(raw_root: Path, out_dir: Path):
+    """Builds Optic Disc, Cup, and Glaucoma manifests for REFUGE2 dataset."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    refuge_root = raw_root / "REFUGE2"
+    if not refuge_root.exists():
+        print(f"[!] REFUGE2 not found at {refuge_root}, skipping.")
+        return
+
+    all_records = []
+
+    # 1. Train Split: REFUGE1-train (400 images)
+    train_root = refuge_root / "Train" / "REFUGE1-train"
+    fov_train_file = train_root / "Fovea_location.xlsx"
+    fov_train_map = {}
+    if fov_train_file.exists():
+        df_fov = pd.read_excel(fov_train_file)
+        for _, row in df_fov.iterrows():
+            fov_train_map[str(row["ImgName"]).strip()] = (
+                row.get("Fovea_X", 0.0),
+                row.get("Fovea_Y", 0.0)
+            )
+
+    train_records = []
+    train_img_dir = train_root / "Training400"
+    train_mask_dir = train_root / "Disc_Cup_Masks"
+    if train_img_dir.exists():
+        for sub in ["Glaucoma", "Non-Glaucoma"]:
+            s_dir = train_img_dir / sub
+            m_dir = train_mask_dir / sub
+            if s_dir.exists():
+                for img_file in sorted(s_dir.glob("*.jpg")):
+                    img_id = img_file.stem
+                    mask_file = m_dir / f"{img_id}.bmp"
+                    diag = 1 if sub == "Glaucoma" else 0
+                    fx, fy = fov_train_map.get(img_file.name, (0.0, 0.0))
+                    cdr = compute_mask_vcdr(mask_file) if mask_file.exists() else 0.0
+                    rec = {
+                        "image_id": img_id,
+                        "patient_id": img_id,
+                        "image_path": to_rel_posix(img_file),
+                        "mask_path": to_rel_posix(mask_file) if mask_file.exists() else "",
+                        "cdr_ref": cdr,
+                        "diagnosis": diag,
+                        "fovea_x": round(float(fx), 2),
+                        "fovea_y": round(float(fy), 2),
+                        "split": "train",
+                        "dataset": "REFUGE2",
+                        "task": "optic_disc_cup_segmentation"
+                    }
+                    train_records.append(rec)
+                    all_records.append(rec)
+
+    df_train = pd.DataFrame(train_records)
+    save_csv(df_train, out_dir / "refuge2_train.csv")
+    print(f"[+] REFUGE2 Train: {len(df_train)} records -> {out_dir / 'refuge2_train.csv'}")
+
+    # 2. Validation Split: REFUGE1-val (400 images)
+    val_root = refuge_root / "Train" / "REFUGE1-val"
+    fov_val_file = val_root / "Fovea_locations.xlsx"
+    fov_val_map = {}
+    diag_val_map = {}
+    if fov_val_file.exists():
+        df_val_m = pd.read_excel(fov_val_file)
+        for _, row in df_val_m.iterrows():
+            name = str(row["ImgName"]).strip()
+            fov_val_map[name] = (row.get("Fovea_X", 0.0), row.get("Fovea_Y", 0.0))
+            lbl = row.get("Glaucoma Label")
+            if lbl is not None and not pd.isna(lbl) and str(lbl).strip() != "":
+                diag_val_map[name] = int(lbl)
+            else:
+                diag_val_map[name] = -1
+
+    val_records = []
+    val_img_dir = val_root / "REFUGE-Validation400"
+    val_mask_dir = val_root / "Disc_Cup_Masks"
+    if val_img_dir.exists():
+        for img_file in sorted(val_img_dir.glob("*.jpg")):
+            img_id = img_file.stem
+            mask_file = val_mask_dir / f"{img_id}.bmp"
+            diag = diag_val_map.get(img_file.name, -1)
+            fx, fy = fov_val_map.get(img_file.name, (0.0, 0.0))
+            cdr = compute_mask_vcdr(mask_file) if mask_file.exists() else 0.0
+            rec = {
+                "image_id": img_id,
+                "patient_id": img_id,
+                "image_path": to_rel_posix(img_file),
+                "mask_path": to_rel_posix(mask_file) if mask_file.exists() else "",
+                "cdr_ref": cdr,
+                "diagnosis": diag,
+                "fovea_x": round(float(fx), 2),
+                "fovea_y": round(float(fy), 2),
+                "split": "val",
+                "dataset": "REFUGE2",
+                "task": "optic_disc_cup_segmentation"
+            }
+            val_records.append(rec)
+            all_records.append(rec)
+
+    df_val = pd.DataFrame(val_records)
+    save_csv(df_val, out_dir / "refuge2_val.csv")
+    print(f"[+] REFUGE2 Val: {len(df_val)} records -> {out_dir / 'refuge2_val.csv'}")
+
+    # 3. Test Split: REFUGE1-test (400 images)
+    test_root = refuge_root / "Train" / "REFUGE1-test"
+    test_meta_file = test_root / "Glaucoma_label_and_Fovea_location.xlsx"
+    fov_test_map = {}
+    diag_test_map = {}
+    if test_meta_file.exists():
+        df_test_m = pd.read_excel(test_meta_file)
+        for _, row in df_test_m.iterrows():
+            name = str(row["ImgName"]).strip()
+            fov_test_map[name] = (row.get("Fovea_X", 0.0), row.get("Fovea_Y", 0.0))
+            diag_test_map[name] = int(row.get("Label(Glaucoma=1)", 0))
+
+    test_records = []
+    test_img_dir = test_root / "Test400"
+    test_mask_dir = test_root / "Disc_Cup_Masks"
+    if test_img_dir.exists():
+        for img_file in sorted(test_img_dir.glob("*.jpg")):
+            img_id = img_file.stem
+            mask_file = test_mask_dir / "G" / f"{img_id}.bmp"
+            if not mask_file.exists():
+                mask_file = test_mask_dir / "N" / f"{img_id}.bmp"
+            diag = diag_test_map.get(img_file.name, 0)
+            fx, fy = fov_test_map.get(img_file.name, (0.0, 0.0))
+            cdr = compute_mask_vcdr(mask_file) if mask_file.exists() else 0.0
+            rec = {
+                "image_id": img_id,
+                "patient_id": img_id,
+                "image_path": to_rel_posix(img_file),
+                "mask_path": to_rel_posix(mask_file) if mask_file.exists() else "",
+                "cdr_ref": cdr,
+                "diagnosis": diag,
+                "fovea_x": round(float(fx), 2),
+                "fovea_y": round(float(fy), 2),
+                "split": "test",
+                "dataset": "REFUGE2",
+                "task": "optic_disc_cup_segmentation"
+            }
+            test_records.append(rec)
+            all_records.append(rec)
+
+    df_test = pd.DataFrame(test_records)
+    save_csv(df_test, out_dir / "refuge2_test.csv")
+    print(f"[+] REFUGE2 Test: {len(df_test)} records -> {out_dir / 'refuge2_test.csv'}")
+
+    # 4. Save combined manifest (1200 records)
+    df_all = pd.DataFrame(all_records)
+    save_csv(df_all, out_dir / "refuge2_all.csv")
+    print(f"[+] REFUGE2 All (Train+Val+Test): {len(df_all)} records -> {out_dir / 'refuge2_all.csv'}")
+
+
 def main():
     raw_root = PROJECT_ROOT / "datasets" / "raw"
     manifests_root = PROJECT_ROOT / "manifests"
@@ -344,6 +512,7 @@ def main():
     build_odir_manifests(raw_root, manifests_root / "multi_disease")
     build_drishti_manifests(raw_root, manifests_root / "optic_disc_cup")
     build_papila_manifests(raw_root, manifests_root / "optic_disc_cup")
+    build_refuge2_manifests(raw_root, manifests_root / "optic_disc_cup")
 
     print("\n[OK] All manifest files generated successfully in manifests/")
 

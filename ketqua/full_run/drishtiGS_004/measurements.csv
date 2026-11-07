@@ -1,0 +1,12 @@
+metric,value,unit
+Image Quality Status,gradable,category
+Blur Score,97.83,variance
+FOV Area Ratio,0.7343,ratio
+Optic Disc Area,1291.0,px2
+Vertical CDR,0.927,ratio
+Vessel Density,4.61,%
+Vessel Length,3378,px
+Disc-Fovea Distance,207.7,px
+DR Grade,1,grade_0_to_4
+Glaucoma Risk Score,0.78,score
+Overall Screening Status,urgent_referral,category

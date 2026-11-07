@@ -34,6 +34,7 @@ from src.models.unet import UNet
 from src.models.losses import MultiChannelDiceBCELoss
 from src.evaluation.segmentation_metrics import calculate_segmentation_metrics
 from src.measurements.optic_disc_metrics import calculate_disc_cup_metrics
+from src.training.resume_utils import load_training_state, save_training_state
 from src.visualization.training_plots import (
     plot_segmentation_training_results,
     plot_sample_predictions,
@@ -110,7 +111,8 @@ def train_optic_disc_cup(
     limit: int | None = None,
     use_augmentation: bool = True,
     output_checkpoint: str = "checkpoints/optic_disc_cup/best_od_oc_model.pth",
-    plot_dir: str = "outputs/plots/optic_disc_cup"
+    plot_dir: str = "outputs/plots/optic_disc_cup",
+    resume: bool = False
 ):
     print("===================================================================")
     print(f"[*] FUNDUS AI - Training U-Net Optic Disc & Cup on mode: {dataset_type.upper()}")
@@ -175,7 +177,13 @@ def train_optic_disc_cup(
         "cdr_mae": []
     }
 
-    for epoch in range(1, epochs + 1):
+    start_epoch = 1
+    if resume:
+        start_epoch, saved = load_training_state(out_path, model, optimizer, scheduler, device, epochs)
+        best_val_dice = saved.get("best_val_dice", best_val_dice)
+        history = saved.get("history", history)
+
+    for epoch in range(start_epoch, epochs + 1):
         model.train()
         train_loss = 0.0
 
@@ -216,6 +224,9 @@ def train_optic_disc_cup(
             best_val_dice = val_res["mean_dice"]
             torch.save(model.state_dict(), str(out_path))
             print(f"  [+] Saved new best model checkpoint to: {out_path} (Val Mean Dice: {best_val_dice:.4f})")
+
+        save_training_state(out_path, epoch, model, optimizer, scheduler,
+                            best_val_dice=best_val_dice, history=history)
 
     print(f"\n[OK] Training & Validation complete!")
     print(f"     Best Checkpoint saved to: {out_path} (Best Val Mean Dice: {best_val_dice:.4f})")
@@ -268,6 +279,7 @@ def main():
     parser.add_argument("--limit", type=int, default=None, help="Limit samples for dry run")
     parser.add_argument("--output_checkpoint", type=str, default="checkpoints/optic_disc_cup/best_od_oc_model.pth")
     parser.add_argument("--plot_dir", type=str, default="outputs/plots/optic_disc_cup", help="Directory to save training curves and sample plots")
+    parser.add_argument("--resume", action="store_true", help="Continue from <checkpoint>_last.pth saved after the last finished epoch")
     parser.add_argument("--eval_only", action="store_true", help="Only evaluate existing checkpoint")
 
     args = parser.parse_args()
@@ -302,7 +314,8 @@ def main():
             limit=args.limit,
             use_augmentation=not args.no_aug,
             output_checkpoint=args.output_checkpoint,
-            plot_dir=args.plot_dir
+            plot_dir=args.plot_dir,
+            resume=args.resume
         )
 
 

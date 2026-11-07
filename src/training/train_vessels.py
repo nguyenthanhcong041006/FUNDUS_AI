@@ -27,6 +27,7 @@ from src.datasets.transforms import JointFundusAugmentation
 from src.models.unet import UNet
 from src.models.losses import DiceBCELoss
 from src.evaluation.segmentation_metrics import calculate_segmentation_metrics
+from src.training.resume_utils import load_training_state, save_training_state
 from src.visualization.training_plots import (
     plot_segmentation_training_results,
     plot_sample_predictions,
@@ -86,7 +87,8 @@ def train_vessels(
     val_split: float = 0.2,
     limit: int | None = None,
     output_checkpoint: str = "checkpoints/vessels/best_vessel_model.pth",
-    plot_dir: str = "outputs/plots/vessels"
+    plot_dir: str = "outputs/plots/vessels",
+    resume: bool = False
 ):
     print("===================================================================")
     print("[*] FUNDUS AI - Training U-Net Vessel Segmentation on DRIVE")
@@ -135,7 +137,13 @@ def train_vessels(
         "specificity": []
     }
 
-    for epoch in range(1, epochs + 1):
+    start_epoch = 1
+    if resume:
+        start_epoch, saved = load_training_state(out_path, model, optimizer, scheduler, device, epochs)
+        best_val_dice = saved.get("best_val_dice", best_val_dice)
+        history = saved.get("history", history)
+
+    for epoch in range(start_epoch, epochs + 1):
         model.train()
         train_loss = 0.0
 
@@ -172,6 +180,9 @@ def train_vessels(
             best_val_dice = val_res["dice"]
             torch.save(model.state_dict(), str(out_path))
             print(f"  [+] Saved new best model checkpoint to: {out_path} (Val Dice: {best_val_dice:.4f})")
+
+        save_training_state(out_path, epoch, model, optimizer, scheduler,
+                            best_val_dice=best_val_dice, history=history)
 
     print("\n[OK] Training & Validation on DRIVE complete!")
     print(f"     Best Checkpoint: {out_path.resolve()} (Best Val Dice: {best_val_dice:.4f})")
@@ -221,6 +232,7 @@ def main():
     parser.add_argument("--limit", type=int, default=None, help="Limit samples for dry run")
     parser.add_argument("--output_checkpoint", type=str, default="checkpoints/vessels/best_vessel_model.pth")
     parser.add_argument("--plot_dir", type=str, default="outputs/plots/vessels", help="Directory to save training curves and sample plots")
+    parser.add_argument("--resume", action="store_true", help="Continue from <checkpoint>_last.pth saved after the last finished epoch")
     parser.add_argument("--eval_only", action="store_true", help="Only evaluate existing checkpoint")
 
     args = parser.parse_args()
@@ -248,7 +260,8 @@ def main():
             val_split=args.val_split,
             limit=args.limit,
             output_checkpoint=args.output_checkpoint,
-            plot_dir=args.plot_dir
+            plot_dir=args.plot_dir,
+            resume=args.resume
         )
 
 

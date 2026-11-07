@@ -27,6 +27,7 @@ from sklearn.metrics import cohen_kappa_score, confusion_matrix
 from src.datasets.aptos_dataset import APTOSDataset
 from src.datasets.transforms import ClassificationFundusAugmentation
 from src.models.efficientnet import FundusClassifier
+from src.training.resume_utils import load_training_state, save_training_state
 from src.visualization.training_plots import (
     plot_classification_training_results,
     save_history_csv
@@ -92,7 +93,8 @@ def train_dr_grading(
     use_augmentation: bool = True,
     limit: int | None = None,
     output_checkpoint: str = "checkpoints/classification/best_dr_classifier.pth",
-    plot_dir: str = "outputs/plots/dr_grading"
+    plot_dir: str = "outputs/plots/dr_grading",
+    resume: bool = False
 ):
     print("===================================================================")
     print("[*] FUNDUS AI - Training EfficientNet-B0 DR Grading on APTOS 2019")
@@ -148,7 +150,15 @@ def train_dr_grading(
     }
     last_cm = None
 
-    for epoch in range(1, epochs + 1):
+    start_epoch = 1
+    if resume:
+        start_epoch, saved = load_training_state(out_path, model, optimizer, scheduler, device, epochs)
+        best_qwk = saved.get("best_qwk", best_qwk)
+        best_epoch = saved.get("best_epoch", best_epoch)
+        patience_counter = saved.get("patience_counter", patience_counter)
+        history = saved.get("history", history)
+
+    for epoch in range(start_epoch, epochs + 1):
         model.train()
         train_loss = 0.0
         correct = 0
@@ -199,7 +209,12 @@ def train_dr_grading(
             print(f"  [-] QWK did not improve. Early stopping counter: {patience_counter}/{patience}")
             if patience_counter >= patience:
                 print(f"\n[!] Early stopping triggered at epoch {epoch}. Best epoch was Epoch {best_epoch} with QWK: {best_qwk:.4f}")
+                save_training_state(out_path, epoch, model, optimizer, scheduler, finished=True,
+                                    best_qwk=best_qwk, best_epoch=best_epoch, patience_counter=patience_counter, history=history)
                 break
+
+        save_training_state(out_path, epoch, model, optimizer, scheduler,
+                            best_qwk=best_qwk, best_epoch=best_epoch, patience_counter=patience_counter, history=history)
 
     print(f"\n[OK] APTOS Training complete! Best QWK Kappa: {best_qwk:.4f} (at Epoch {best_epoch})")
     print(f"     Checkpoint saved to: {out_path.resolve()}")
@@ -240,6 +255,7 @@ def main():
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--output_checkpoint", type=str, default="checkpoints/classification/best_dr_classifier.pth")
     parser.add_argument("--plot_dir", type=str, default="outputs/plots/dr_grading")
+    parser.add_argument("--resume", action="store_true", help="Continue from <checkpoint>_last.pth saved after the last finished epoch")
     args = parser.parse_args()
 
     train_dr_grading(
@@ -252,7 +268,8 @@ def main():
         use_augmentation=not args.no_aug,
         limit=args.limit,
         output_checkpoint=args.output_checkpoint,
-        plot_dir=args.plot_dir
+        plot_dir=args.plot_dir,
+        resume=args.resume
     )
 
 

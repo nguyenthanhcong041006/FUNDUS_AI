@@ -45,6 +45,7 @@ REQUIRED_PACKAGES = ["torch", "torchvision", "numpy", "pandas", "cv2", "PIL", "s
 # Batch sizes in TASKS were measured once on this machine (forward+backward+AdamW step @ 512px,
 # 07/11/2026, ~6.9 GB VRAM free with desktop apps open). U-Net speed is the same at batch 2 and 3
 # (~8.6 img/s, GPU already saturated) so batch 2 is used; Attention U-Net at batch 3 needs 6.8 GB.
+# M1 (REFUGE2) uses batch 4 as in the README: it uses BatchNorm, which is unstable at batch 2.
 HARDWARE_PROFILE = "RTX 4060 Laptop 8 GB, 512px"
 
 # ---------------------------------------------------------------------------------------------
@@ -52,11 +53,11 @@ HARDWARE_PROFILE = "RTX 4060 Laptop 8 GB, 512px"
 # ---------------------------------------------------------------------------------------------
 TASKS = [
     dict(key="optic_disc_cup", name="M1 Optic Disc & Cup (REFUGE2)",
-         module="src.training.train_optic_disc_cup", extra=["--dataset", "refuge2"],
+         module="src.training.train_optic_disc_cup", extra=[],   # REFUGE2 only since main@adebd18
          manifests=["manifests/optic_disc_cup/refuge2_train.csv", "manifests/optic_disc_cup/refuge2_val.csv",
-                    "manifests/optic_disc_cup/papila_external_test.csv"],
+                    "manifests/optic_disc_cup/refuge2_test.csv"],
          train_manifest="manifests/optic_disc_cup/refuge2_train.csv", train_factor=1.0,
-         model="unet:2", epochs=30, bs=2, peak_gb=3.6,
+         model="unet:2", epochs=25, bs=4, peak_gb=6.8,
          checkpoint="checkpoints/optic_disc_cup/best_od_oc_model.pth"),
     dict(key="vessels", name="M2 Vessels (DRIVE)",
          module="src.training.train_vessels", extra=[],
@@ -74,7 +75,7 @@ TASKS = [
          module="src.training.train_lesions", extra=[],
          manifests=["manifests/dr_lesions/idrid_lesions_train.csv", "manifests/dr_lesions/idrid_lesions_test.csv"],
          train_manifest="manifests/dr_lesions/idrid_lesions_train.csv", train_factor=0.8,
-         model="attunet:4", epochs=50, bs=2, peak_gb=4.84,
+         model="attunet:4", epochs=25, bs=2, peak_gb=4.84,
          checkpoint="checkpoints/lesions/best_lesion_model.pth"),
     dict(key="dr_grading", name="M5 DR Grading (APTOS)",
          module="src.training.train_dr_grading", extra=[],
@@ -623,6 +624,8 @@ def train_task(t, bs, epochs, run_dir, dev, log, args):
                     best_line = line.strip()
                     events.append(f"ep{epochs_done}: {line.strip()}")
                 if "Early stopping triggered" in line:
+                    events.append(line.strip())
+                if "Test Benchmark Result" in line or "Official Test Result" in line:
                     events.append(line.strip())
                 rm = RESUME_RE.search(line)
                 if rm:

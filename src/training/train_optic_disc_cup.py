@@ -1,12 +1,12 @@
-"""Training & Validation script for Optic Disc & Optic Cup Segmentation.
+"""Training & Validation script for Optic Disc & Optic Cup Segmentation (REFUGE2 Benchmark).
 
 Features:
 - Aspect-ratio preserving letterboxing
-- Zero data leakage: strict separation of Train, Validation, and Test sets
+- Zero data leakage: strict separation of Train (400), Validation (400), and Test (400) sets
 - Computation of both Train Loss and Val Loss with dual loss curve generation
 - Joint Medical Data Augmentation (flips, rotation, scaling, CLAHE, jitter)
-- Multi-domain training support (REFUGE2 + Drishti-GS1)
-- CosineAnnealingLR scheduling
+- Standardized strictly on the REFUGE2 MICCAI benchmark
+- CosineAnnealingLR scheduling and Early Stopping
 """
 
 import argparse
@@ -20,17 +20,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.datasets.optic_disc_cup_dataset import (
-    DrishtiDataset,
-    REFUGE2Dataset,
-    PAPILADataset,
-    MixedOpticDiscDataset
-)
+from src.datasets.optic_disc_cup_dataset import REFUGE2Dataset
 from src.datasets.transforms import JointFundusAugmentation
-from src.models.unet import UNet
+from src.models.unet import UNet, load_checkpoint_unet
 from src.models.losses import MultiChannelDiceBCELoss
 from src.evaluation.segmentation_metrics import calculate_segmentation_metrics
 from src.measurements.optic_disc_metrics import calculate_disc_cup_metrics
@@ -100,14 +95,15 @@ def evaluate(model, data_loader, criterion, device, threshold: float = 0.5):
 
 
 def train_optic_disc_cup(
-    dataset_type: str = "refuge2",
     train_manifest: str = "manifests/optic_disc_cup/refuge2_train.csv",
     val_manifest: str = "manifests/optic_disc_cup/refuge2_val.csv",
-    test_manifest: str | None = None,
-    epochs: int = 15,
+    test_manifest: str = "manifests/optic_disc_cup/refuge2_test.csv",
+    epochs: int = 25,
     batch_size: int = 4,
     lr: float = 3e-4,
     image_size: int = 512,
+    patience: int = 6,
+    norm_type: str = "batch",
     limit: int | None = None,
     use_augmentation: bool = True,
     output_checkpoint: str = "checkpoints/optic_disc_cup/best_od_oc_model.pth",
@@ -115,38 +111,21 @@ def train_optic_disc_cup(
     resume: bool = False
 ):
     print("===================================================================")
-    print(f"[*] FUNDUS AI - Training U-Net Optic Disc & Cup on mode: {dataset_type.upper()}")
+    print(f"[*] FUNDUS AI - Training U-Net Optic Disc & Cup (REFUGE2 Benchmark | Norm: {norm_type.upper()})")
     print(f"    Train manifest: {train_manifest}")
     print(f"    Val manifest:   {val_manifest}")
     print(f"    Test manifest:  {test_manifest}")
     print(f"    Epochs: {epochs} | Batch size: {batch_size} | Size: {image_size}x{image_size} | LR: {lr}")
+    print(f"    Early stopping patience: {patience} epochs | Augmentation: {use_augmentation}")
     print(f"    Plots output:   {plot_dir}")
     print("===================================================================\n")
 
     aug = JointFundusAugmentation() if use_augmentation else None
 
-    # Construct Train and Val datasets based on dataset_type
-    if dataset_type == "multi":
-        # Multi-domain: Combine REFUGE2 train + Drishti train
-        refuge_train = REFUGE2Dataset("manifests/optic_disc_cup/refuge2_train.csv", image_size=image_size, transform=aug, limit=limit)
-        drishti_train = DrishtiDataset("manifests/optic_disc_cup/drishti_train.csv", image_size=image_size, transform=aug, limit=limit)
-        train_dataset = MixedOpticDiscDataset([refuge_train, drishti_train])
-
-        refuge_val = REFUGE2Dataset("manifests/optic_disc_cup/refuge2_val.csv", image_size=image_size, limit=limit)
-        drishti_test = DrishtiDataset("manifests/optic_disc_cup/drishti_test.csv", image_size=image_size, limit=limit)
-        val_dataset = MixedOpticDiscDataset([refuge_val, drishti_test])
-        test_dataset = PAPILADataset("manifests/optic_disc_cup/papila_external_test.csv", image_size=image_size, limit=limit)
-    elif dataset_type == "drishti":
-        full_drishti = DrishtiDataset(train_manifest, image_size=image_size, limit=limit)
-        n_total = len(full_drishti)
-        n_val = max(1, int(0.2 * n_total))
-        n_train = n_total - n_val
-        train_dataset, val_dataset = random_split(full_drishti, [n_train, n_val], generator=torch.Generator().manual_seed(42))
-        test_dataset = DrishtiDataset(test_manifest or "manifests/optic_disc_cup/drishti_test.csv", image_size=image_size, limit=limit)
-    else:  # refuge2 default
-        train_dataset = REFUGE2Dataset(train_manifest, image_size=image_size, transform=aug, limit=limit)
-        val_dataset = REFUGE2Dataset(val_manifest, image_size=image_size, limit=limit)
-        test_dataset = PAPILADataset("manifests/optic_disc_cup/papila_external_test.csv", image_size=image_size, limit=limit)
+    # REFUGE2 Standard Splits: 400 Train / 400 Val / 400 Test (Zero Leakage)
+    train_dataset = REFUGE2Dataset(train_manifest, image_size=image_size, transform=aug, limit=limit)
+    val_dataset = REFUGE2Dataset(val_manifest, image_size=image_size, limit=limit)
+    test_dataset = REFUGE2Dataset(test_manifest, image_size=image_size, limit=limit) if test_manifest else None
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
@@ -157,8 +136,8 @@ def train_optic_disc_cup(
     if test_loader:
         print(f"    Isolated External Test samples: {len(test_dataset)}")
 
-    # 2 output classes: Channel 0 = Optic Disc, Channel 1 = Optic Cup
-    model = UNet(in_channels=3, num_classes=2).to(device)
+    # 2 output classes: Channel 0 = Optic Disc, Channel 1 = Optic Cup (Supports GroupNorm or BatchNorm)
+    model = UNet(in_channels=3, num_classes=2, norm_type=norm_type).to(device)
     criterion = MultiChannelDiceBCELoss(dice_weight=0.5, bce_weight=0.5)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
@@ -166,6 +145,9 @@ def train_optic_disc_cup(
     best_val_dice = 0.0
     out_path = Path(output_checkpoint)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    best_val_dice = 0.0
+    best_epoch = 0
+    patience_counter = 0
 
     # History dictionary for tracking metrics and plotting (includes val_loss!)
     history = {
@@ -181,6 +163,8 @@ def train_optic_disc_cup(
     if resume:
         start_epoch, saved = load_training_state(out_path, model, optimizer, scheduler, device, epochs)
         best_val_dice = saved.get("best_val_dice", best_val_dice)
+        best_epoch = saved.get("best_epoch", best_epoch)
+        patience_counter = saved.get("patience_counter", patience_counter)
         history = saved.get("history", history)
 
     for epoch in range(start_epoch, epochs + 1):
@@ -222,19 +206,29 @@ def train_optic_disc_cup(
         # Checkpoint selection strictly based on validation performance
         if val_res["mean_dice"] > best_val_dice:
             best_val_dice = val_res["mean_dice"]
+            best_epoch = epoch
+            patience_counter = 0
             torch.save(model.state_dict(), str(out_path))
             print(f"  [+] Saved new best model checkpoint to: {out_path} (Val Mean Dice: {best_val_dice:.4f})")
+        else:
+            patience_counter += 1
+            print(f"  [-] Val Mean Dice did not improve. Early stopping counter: {patience_counter}/{patience}")
+            if patience_counter >= patience:
+                print(f"\n[!] Early stopping triggered at epoch {epoch}. Best epoch was Epoch {best_epoch} with Val Mean Dice: {best_val_dice:.4f}")
+                save_training_state(out_path, epoch, model, optimizer, scheduler, finished=True,
+                                    best_val_dice=best_val_dice, best_epoch=best_epoch, patience_counter=patience_counter, history=history)
+                break
 
         save_training_state(out_path, epoch, model, optimizer, scheduler,
-                            best_val_dice=best_val_dice, history=history)
+                            best_val_dice=best_val_dice, best_epoch=best_epoch, patience_counter=patience_counter, history=history)
 
-    print(f"\n[OK] Training & Validation complete!")
-    print(f"     Best Checkpoint saved to: {out_path} (Best Val Mean Dice: {best_val_dice:.4f})")
+    print(f"\n[OK] Training & Validation complete! Best Val Mean Dice: {best_val_dice:.4f} (at Epoch {best_epoch})")
+    print(f"     Best Checkpoint saved to: {out_path.resolve()}")
 
     # Reload best checkpoint for plotting and external evaluation
     if out_path.is_file():
         print(f"[*] Reloading best checkpoint from {out_path} for final evaluation & visual analytics...")
-        model.load_state_dict(torch.load(str(out_path), map_location=device))
+        model = load_checkpoint_unet(str(out_path), in_channels=3, num_classes=2, map_location=device).to(device)
 
     # Generate and save all evaluation plots and metrics CSV
     plots_path = Path(plot_dir)
@@ -243,7 +237,7 @@ def train_optic_disc_cup(
     plot_segmentation_training_results(
         history=history,
         out_dir=plots_path,
-        dataset_name=dataset_type.upper(),
+        dataset_name="REFUGE2",
         task_name="Optic Disc & Cup Segmentation"
     )
     plot_sample_predictions(
@@ -251,30 +245,31 @@ def train_optic_disc_cup(
         test_loader=val_loader,
         device=device,
         out_dir=plots_path,
-        dataset_name=dataset_type.upper(),
+        dataset_name="REFUGE2",
         task_type="optic_disc_cup",
         num_samples=3
     )
 
     # Isolated Final Test Evaluation (Only run once at the very end!)
     if test_loader is not None:
-        print("\n[*] Running ISOLATED External Benchmark on Unseen Test Split...")
+        print("\n[*] Running ISOLATED Benchmark on REFUGE2 Test Split (400 images)...")
         test_res = evaluate(model, test_loader, criterion, device)
-        print(f"  [Benchmark Result] Test Loss: {test_res['val_loss']:.4f} | Mean Dice: {test_res['mean_dice']:.4f} (OD: {test_res['od_dice']:.4f}, Cup: {test_res['cup_dice']:.4f}) | CDR MAE: {test_res['cdr_mae']:.4f}")
+        print(f"  [REFUGE2 Test Benchmark Result] Test Loss: {test_res['val_loss']:.4f} | Mean Dice: {test_res['mean_dice']:.4f} (OD: {test_res['od_dice']:.4f}, Cup: {test_res['cup_dice']:.4f}) | CDR MAE: {test_res['cdr_mae']:.4f}")
 
     return best_val_dice
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train U-Net on Optic Disc & Cup (REFUGE2 / Drishti-GS1 / Multi-Domain)")
-    parser.add_argument("--dataset", type=str, choices=["refuge2", "drishti", "multi"], default="refuge2", help="Target dataset mode")
+    parser = argparse.ArgumentParser(description="Train U-Net on Optic Disc & Cup Segmentation (REFUGE2 Benchmark)")
     parser.add_argument("--train_manifest", type=str, default="manifests/optic_disc_cup/refuge2_train.csv")
     parser.add_argument("--val_manifest", type=str, default="manifests/optic_disc_cup/refuge2_val.csv")
-    parser.add_argument("--test_manifest", type=str, default=None)
-    parser.add_argument("--epochs", type=int, default=15)
+    parser.add_argument("--test_manifest", type=str, default="manifests/optic_disc_cup/refuge2_test.csv")
+    parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--image_size", type=int, default=512)
+    parser.add_argument("--patience", type=int, default=6, help="Early stopping patience in epochs")
+    parser.add_argument("--norm", type=str, choices=["batch", "group"], default="batch", help="Normalization layer (batch or group)")
     parser.add_argument("--no_aug", action="store_true", help="Disable data augmentation")
     parser.add_argument("--limit", type=int, default=None, help="Limit samples for dry run")
     parser.add_argument("--output_checkpoint", type=str, default="checkpoints/optic_disc_cup/best_od_oc_model.pth")
@@ -284,18 +279,13 @@ def main():
 
     args = parser.parse_args()
 
-    if args.dataset == "drishti":
-        args.train_manifest = "manifests/optic_disc_cup/drishti_train.csv"
-        args.test_manifest = "manifests/optic_disc_cup/drishti_test.csv"
-
     if args.eval_only:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         eval_manifest = args.test_manifest or args.val_manifest
-        test_dataset = REFUGE2Dataset(eval_manifest, image_size=args.image_size, limit=args.limit) if "refuge" in eval_manifest else DrishtiDataset(eval_manifest, image_size=args.image_size, limit=args.limit)
+        test_dataset = REFUGE2Dataset(eval_manifest, image_size=args.image_size, limit=args.limit)
         test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
 
-        model = UNet(in_channels=3, num_classes=2).to(device)
-        model.load_state_dict(torch.load(args.output_checkpoint, map_location=device))
+        model = load_checkpoint_unet(args.output_checkpoint, in_channels=3, num_classes=2, map_location=device).to(device)
         criterion = MultiChannelDiceBCELoss()
         res = evaluate(model, test_loader, criterion, device)
         print(f"\n[Test Evaluation Results on {eval_manifest}]:")
@@ -303,7 +293,6 @@ def main():
             print(f"  {k}: {v}")
     else:
         train_optic_disc_cup(
-            dataset_type=args.dataset,
             train_manifest=args.train_manifest,
             val_manifest=args.val_manifest,
             test_manifest=args.test_manifest,
@@ -311,6 +300,8 @@ def main():
             batch_size=args.batch_size,
             lr=args.lr,
             image_size=args.image_size,
+            patience=args.patience,
+            norm_type=args.norm,
             limit=args.limit,
             use_augmentation=not args.no_aug,
             output_checkpoint=args.output_checkpoint,

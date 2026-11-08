@@ -6,6 +6,18 @@ import cv2
 import numpy as np
 
 
+def remove_small_objects(mask: np.ndarray, min_size: int = 30) -> np.ndarray:
+    """Eliminates isolated pixel clusters smaller than min_size."""
+    if np.sum(mask > 0) == 0:
+        return mask
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats((mask > 0).astype(np.uint8), connectivity=8)
+    out = np.zeros_like(mask)
+    for i in range(1, num_labels):
+        if stats[i, cv2.CC_STAT_AREA] >= min_size:
+            out[labels == i] = 255
+    return out
+
+
 class VesselSegmenter:
     """Segments retinal blood vessels using deep learning or adaptive morphological filters."""
 
@@ -16,13 +28,8 @@ class VesselSegmenter:
 
         if self.model_path and Path(self.model_path).exists():
             try:
-                import torch
-                from src.models.unet import UNet
-                net = UNet(in_channels=3, num_classes=1)
-                state = torch.load(self.model_path, map_location="cpu")
-                net.load_state_dict(state)
-                net.eval()
-                self.model = net
+                from src.models.unet import load_checkpoint_unet
+                self.model = load_checkpoint_unet(self.model_path, in_channels=3, num_classes=1, map_location="cpu")
                 print(f"     [U-Net Model Active] Loaded vessel checkpoint: {self.model_path}")
             except Exception as e:
                 print(f"     [U-Net Load Warning] Falling back to morphology: {e}")
@@ -78,6 +85,9 @@ class VesselSegmenter:
         # Mask out anything outside the FOV
         if fov_mask is not None:
             vessel_mask = cv2.bitwise_and(vessel_mask, fov_mask)
+
+        # Eliminate isolated noise speckles
+        vessel_mask = remove_small_objects(vessel_mask, min_size=30)
 
         vessel_pixels = int(np.sum(vessel_mask > 0))
         valid_fov_pixels = int(np.sum(fov_mask > 0)) if fov_mask is not None else (h * w)

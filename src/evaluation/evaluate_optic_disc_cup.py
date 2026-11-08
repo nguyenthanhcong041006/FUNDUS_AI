@@ -1,9 +1,9 @@
-"""Optic Disc & Cup Evaluation Script supporting Internal (Drishti-GS1) and External (PAPILA) Validation.
+"""Optic Disc & Cup Evaluation Script for the REFUGE2 MICCAI Benchmark.
 
 Computes:
   1. Segmentation Metrics (Dice, IoU, Sensitivity, Specificity) for Optic Disc and Cup
   2. Vertical Cup-to-Disc Ratio (vCDR) accuracy against clinical expert ground truth
-  3. External Glaucoma Screening evaluation (ROC-AUC, Sensitivity, Specificity) on PAPILA
+  3. Glaucoma Screening evaluation (ROC-AUC, Sensitivity, Specificity, Accuracy) based on morphological vCDR
 """
 
 import argparse
@@ -21,14 +21,14 @@ from sklearn.metrics import roc_auc_score, accuracy_score
 import torch
 from torch.utils.data import DataLoader
 
-from src.datasets.optic_disc_cup_dataset import DrishtiDataset, PAPILADataset
+from src.datasets.optic_disc_cup_dataset import REFUGE2Dataset
 from src.models.unet import UNet
 from src.evaluation.segmentation_metrics import calculate_segmentation_metrics
 from src.measurements.optic_disc_metrics import calculate_disc_cup_metrics
 from src.datasets.utils import resolve_path
 
 
-def evaluate_drishti_internal(
+def evaluate_refuge2(
     model: torch.nn.Module,
     manifest_path: str,
     device: torch.device,
@@ -36,12 +36,12 @@ def evaluate_drishti_internal(
     threshold: float = 0.5,
     limit: int | None = None
 ) -> pd.DataFrame:
-    """Internal validation on official Drishti-GS1 test split."""
+    """Benchmark evaluation on REFUGE2 test/validation split."""
     print("-------------------------------------------------------------------")
-    print(f"[*] 1. Internal Validation on Drishti-GS1 ({manifest_path})")
+    print(f"[*] REFUGE2 Benchmark Evaluation ({manifest_path})")
     print("-------------------------------------------------------------------")
 
-    dataset = DrishtiDataset(manifest_path=manifest_path, image_size=image_size, limit=limit)
+    dataset = REFUGE2Dataset(manifest_path=manifest_path, image_size=image_size, limit=limit)
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
     records = []
@@ -50,6 +50,7 @@ def evaluate_drishti_internal(
             image = batch["image"].to(device)
             target = batch["mask"].to(device)
             cdr_ref = float(batch["cdr_ref"].item())
+            diagnosis = int(batch["diagnosis"].item())
             image_id = batch["image_id"][0]
 
             logits = model(image)
@@ -68,11 +69,11 @@ def evaluate_drishti_internal(
             # Morphological vCDR
             morph = calculate_disc_cup_metrics(pred_od, pred_cup)
             pred_vcdr = morph["optic_cup"]["vertical_cdr"]
-            cdr_err = abs(pred_vcdr - cdr_ref) if cdr_ref > 0 else None
+            cdr_err = abs(pred_vcdr - cdr_ref) if (cdr_ref > 0 and pred_vcdr is not None) else None
 
             records.append({
                 "image_id": image_id,
-                "dataset": "Drishti-GS1",
+                "dataset": "REFUGE2",
                 "dice_od": round(m_od["dice"], 4),
                 "iou_od": round(m_od["iou"], 4),
                 "sens_od": round(m_od["recall_sensitivity"], 4),
@@ -81,7 +82,8 @@ def evaluate_drishti_internal(
                 "sens_cup": round(m_cup["recall_sensitivity"], 4),
                 "pred_vcdr": pred_vcdr,
                 "ref_cdr": cdr_ref if cdr_ref > 0 else np.nan,
-                "cdr_mae": round(cdr_err, 4) if cdr_err is not None else np.nan
+                "cdr_mae": round(cdr_err, 4) if cdr_err is not None else np.nan,
+                "clinical_diagnosis": diagnosis  # 0: Non-Glaucoma, 1: Glaucoma
             })
 
     df = pd.DataFrame(records)
@@ -91,80 +93,16 @@ def evaluate_drishti_internal(
     valid_cdr = df["cdr_mae"].dropna()
     if len(valid_cdr) > 0:
         print(f"  [+] vCDR vs Expert GT - Mean Absolute Error (MAE): {valid_cdr.mean():.4f}")
-    print("-------------------------------------------------------------------\n")
-    return df
 
-
-def evaluate_papila_external(
-    model: torch.nn.Module,
-    manifest_path: str,
-    device: torch.device,
-    image_size: int = 512,
-    threshold: float = 0.5,
-    limit: int | None = None
-) -> pd.DataFrame:
-    """External validation on independent PAPILA dataset (generalization & glaucoma screening)."""
-    print("-------------------------------------------------------------------")
-    print(f"[*] 2. External Validation on PAPILA ({manifest_path})")
-    print("-------------------------------------------------------------------")
-
-    dataset = PAPILADataset(manifest_path=manifest_path, image_size=image_size, limit=limit)
-    loader = DataLoader(dataset, batch_size=1, shuffle=False)
-
-    records = []
-    with torch.no_grad():
-        for batch in loader:
-            image = batch["image"].to(device)
-            target = batch["mask"].to(device)
-            diagnosis = int(batch["diagnosis"].item())
-            image_id = batch["image_id"][0]
-            patient_id = batch["patient_id"][0]
-            eye_side = batch["eye_side"][0]
-
-            logits = model(image)
-            probs = torch.sigmoid(logits)[0]
-
-            # Channel 0: Optic Disc
-            pred_od = (probs[0].cpu().numpy() > threshold).astype(np.uint8) * 255
-            gt_od = (target[0, 0].cpu().numpy() > 0).astype(np.uint8) * 255
-            m_od = calculate_segmentation_metrics(pred_od, gt_od)
-
-            # Channel 1: Optic Cup
-            pred_cup = (probs[1].cpu().numpy() > threshold).astype(np.uint8) * 255
-            gt_cup = (target[0, 1].cpu().numpy() > 0).astype(np.uint8) * 255
-            m_cup = calculate_segmentation_metrics(pred_cup, gt_cup)
-
-            # Morphological vCDR
-            morph = calculate_disc_cup_metrics(pred_od, pred_cup)
-            pred_vcdr = morph["optic_cup"]["vertical_cdr"]
-
-            records.append({
-                "image_id": image_id,
-                "patient_id": patient_id,
-                "eye_side": eye_side,
-                "dataset": "PAPILA",
-                "dice_od": round(m_od["dice"], 4),
-                "iou_od": round(m_od["iou"], 4),
-                "dice_cup": round(m_cup["dice"], 4),
-                "iou_cup": round(m_cup["iou"], 4),
-                "pred_vcdr": pred_vcdr,
-                "clinical_diagnosis": diagnosis  # 0: Normal, 1: Glaucoma, 2: Suspicious
-            })
-
-    df = pd.DataFrame(records)
-    print(f"  [+] Images evaluated: {len(df)}")
-    print(f"  [+] Optic Disc - External Mean Dice: {df['dice_od'].mean():.4f} | Mean IoU: {df['iou_od'].mean():.4f}")
-    print(f"  [+] Optic Cup  - External Mean Dice: {df['dice_cup'].mean():.4f} | Mean IoU: {df['iou_cup'].mean():.4f}")
-
-    # Glaucoma screening evaluation (Normal=0 vs Glaucoma=1, excluding/including suspicious)
+    # Glaucoma screening evaluation from morphology (Non-Glaucoma=0 vs Glaucoma=1)
     binary_df = df[df["clinical_diagnosis"].isin([0, 1])].copy()
-    if len(binary_df) > 0 and len(binary_df["clinical_diagnosis"].unique()) > 1:
-        y_true = binary_df["clinical_diagnosis"].values
-        y_scores = binary_df["pred_vcdr"].values
+    valid_vcdr_df = binary_df.dropna(subset=["pred_vcdr"])
+    if len(valid_vcdr_df) > 0 and len(valid_vcdr_df["clinical_diagnosis"].unique()) > 1:
+        y_true = valid_vcdr_df["clinical_diagnosis"].values
+        y_scores = valid_vcdr_df["pred_vcdr"].values
 
         try:
             auc = roc_auc_score(y_true, y_scores)
-            # Clinical cutoff at vCDR >= 0.65
             y_pred_binary = (y_scores >= 0.65).astype(int)
             acc = accuracy_score(y_true, y_pred_binary)
             tp = int(((y_pred_binary == 1) & (y_true == 1)).sum())
@@ -188,15 +126,13 @@ def evaluate_papila_external(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Optic Disc & Cup Comprehensive Evaluation")
+    parser = argparse.ArgumentParser(description="REFUGE2 Optic Disc & Cup Evaluation")
     parser.add_argument("--checkpoint", type=str, default="checkpoints/optic_disc_cup/best_od_oc_model.pth")
-    parser.add_argument("--drishti_manifest", type=str, default="manifests/optic_disc_cup/drishti_test.csv")
-    parser.add_argument("--papila_manifest", type=str, default="manifests/optic_disc_cup/papila_external_test.csv")
+    parser.add_argument("--manifest", type=str, default="manifests/optic_disc_cup/refuge2_test.csv")
     parser.add_argument("--image_size", type=int, default=512)
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default="outputs")
-    parser.add_argument("--skip_external", action="store_true")
 
     args = parser.parse_args()
 
@@ -213,34 +149,18 @@ def main():
     out_dir = resolve_path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Internal Validation (Drishti-GS1)
-    df_drishti = evaluate_drishti_internal(
+    df = evaluate_refuge2(
         model=model,
-        manifest_path=args.drishti_manifest,
+        manifest_path=args.manifest,
         device=device,
         image_size=args.image_size,
         threshold=args.threshold,
         limit=args.limit
     )
-    df_drishti.to_csv(out_dir / "optic_disc_cup_internal_evaluation.csv", index=False)
-    print(f"[+] Saved Internal Evaluation CSV: {out_dir / 'optic_disc_cup_internal_evaluation.csv'}")
-
-    # 2. External Validation (PAPILA)
-    if not args.skip_external:
-        df_papila = evaluate_papila_external(
-            model=model,
-            manifest_path=args.papila_manifest,
-            device=device,
-            image_size=args.image_size,
-            threshold=args.threshold,
-            limit=args.limit
-        )
-        df_papila.to_csv(out_dir / "optic_disc_cup_external_evaluation.csv", index=False)
-        print(f"[+] Saved External Evaluation CSV: {out_dir / 'optic_disc_cup_external_evaluation.csv'}")
-
-    print("\n[OK] Comprehensive Optic Disc/Cup Evaluation Complete!")
+    df.to_csv(out_dir / "optic_disc_cup_refuge2_evaluation.csv", index=False)
+    print(f"[+] Saved REFUGE2 Evaluation CSV: {out_dir / 'optic_disc_cup_refuge2_evaluation.csv'}")
+    print("\n[OK] REFUGE2 Evaluation Complete!")
 
 
 if __name__ == "__main__":
     main()
-

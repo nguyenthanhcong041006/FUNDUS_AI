@@ -101,3 +101,87 @@ class MultiChannelDiceBCELoss(nn.Module):
         return (self.bce_weight * bce_loss) + (self.dice_weight * dice_loss)
 
 
+class MultiChannelFocalDiceLoss(nn.Module):
+    """Per-channel Focal Loss + Per-channel Soft Dice Loss for multi-class retinal lesions.
+
+    Combines hard negative mining via Focal Loss (to heavily penalize false positive
+    vessels and background regions) with independent per-channel Soft Dice loss (to ensure
+    tiny microaneurysms and hemorrhages receive equitable gradient magnitude).
+    """
+
+    def __init__(
+        self,
+        focal_weight: float = 0.5,
+        dice_weight: float = 0.5,
+        gamma: float = 2.0,
+        alpha: float = 0.75,
+        smooth: float = 1e-6
+    ):
+        super().__init__()
+        self.focal_weight = focal_weight
+        self.dice_weight = dice_weight
+        self.gamma = gamma
+        self.alpha = alpha
+        self.smooth = smooth
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        num_channels = logits.size(1)
+        probs = torch.sigmoid(logits)
+
+        channel_losses = []
+        for c in range(num_channels):
+            l_c = logits[:, c]
+            p_c = probs[:, c]
+            t_c = targets[:, c]
+
+            # 1. Per-channel Focal Loss
+            bce = F.binary_cross_entropy_with_logits(l_c, t_c, reduction="none")
+            p_t = t_c * p_c + (1.0 - t_c) * (1.0 - p_c)
+            alpha_t = t_c * self.alpha + (1.0 - t_c) * (1.0 - self.alpha)
+            focal = (alpha_t * ((1.0 - p_t) ** self.gamma) * bce).mean()
+
+            # 2. Per-channel Soft Dice Loss
+            p_flat = p_c.reshape(-1)
+            t_flat = t_c.reshape(-1)
+            inter = (p_flat * t_flat).sum()
+            dice = (2.0 * inter + self.smooth) / (p_flat.sum() + t_flat.sum() + self.smooth)
+            dice_loss = 1.0 - dice
+
+            channel_losses.append((self.focal_weight * focal) + (self.dice_weight * dice_loss))
+
+        return sum(channel_losses) / max(num_channels, 1)
+
+
+class CategoricalFocalLoss(nn.Module):
+    """Multi-class Categorical Focal Loss with Label Smoothing for imbalanced ordinal DR grading.
+
+    Combines Focal Loss (gamma=2.0) with Label Smoothing (0.1) to prevent overfitting
+    and loss divergence in late epochs on APTOS 2019 DR Severity classification.
+    """
+
+    def __init__(
+        self,
+        gamma: float = 2.0,
+        alpha: torch.Tensor | None = None,
+        label_smoothing: float = 0.1
+    ):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.label_smoothing = label_smoothing
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # Cross entropy loss with label smoothing per sample
+        ce = F.cross_entropy(logits, targets, label_smoothing=self.label_smoothing, reduction="none")
+        probs = F.softmax(logits, dim=-1)
+        p_t = probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+        focal_weight = (1.0 - p_t) ** self.gamma
+
+        if self.alpha is not None:
+            alpha_t = self.alpha.to(logits.device).gather(0, targets)
+            focal_weight = alpha_t * focal_weight
+
+        return (focal_weight * ce).mean()
+
+
+

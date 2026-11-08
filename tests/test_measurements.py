@@ -132,3 +132,67 @@ def test_lesion_metrics():
     metrics = calculate_lesion_metrics(lesion, "hard_exudate")
     assert metrics["count"] == 2
     assert metrics["total_area_px2"] > 0
+
+
+def test_multichannel_focal_dice_loss():
+    from src.models.losses import MultiChannelFocalDiceLoss
+    import torch
+
+    loss_fn = MultiChannelFocalDiceLoss(focal_weight=0.5, dice_weight=0.5, gamma=2.0, alpha=0.75)
+
+    # 4 channels: B=2, C=4, H=64, W=64
+    logits = torch.randn(2, 4, 64, 64, requires_grad=True)
+    targets = torch.zeros(2, 4, 64, 64)
+    # Add sparse lesions to channel 0 and channel 2
+    targets[0, 0, 10:15, 10:15] = 1.0
+    targets[1, 2, 20:30, 20:30] = 1.0
+
+    loss = loss_fn(logits, targets)
+    assert not torch.isnan(loss)
+    assert loss.item() > 0.0
+
+    # Test backward pass
+    loss.backward()
+    assert logits.grad is not None
+    assert not torch.isnan(logits.grad).any()
+
+
+def test_unet_group_norm():
+    from src.models.unet import UNet
+    import torch
+
+    net = UNet(in_channels=3, num_classes=2, norm_type="group", num_groups=8)
+    x = torch.randn(2, 3, 64, 64)
+    out = net(x)
+    assert out.shape == (2, 2, 64, 64)
+
+
+
+def test_categorical_focal_loss():
+    from src.models.losses import CategoricalFocalLoss
+    import torch
+
+    loss_fn = CategoricalFocalLoss(gamma=2.0, label_smoothing=0.1)
+
+    logits = torch.randn(4, 5, requires_grad=True)  # B=4, 5 classes
+    targets = torch.tensor([0, 2, 4, 1], dtype=torch.long)
+
+    loss = loss_fn(logits, targets)
+    assert not torch.isnan(loss)
+    assert loss.item() > 0.0
+
+    loss.backward()
+    assert logits.grad is not None
+    assert not torch.isnan(logits.grad).any()
+
+
+def test_unet_group_norm():
+    from src.models.unet import UNet
+    import torch
+
+    net = UNet(in_channels=3, num_classes=2, norm_type="group", num_groups=8)
+    x = torch.randn(2, 3, 64, 64)
+    out = net(x)
+    assert out.shape == (2, 2, 64, 64)
+
+

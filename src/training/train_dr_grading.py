@@ -27,6 +27,7 @@ from sklearn.metrics import cohen_kappa_score, confusion_matrix
 from src.datasets.aptos_dataset import APTOSDataset
 from src.datasets.transforms import ClassificationFundusAugmentation
 from src.models.efficientnet import FundusClassifier
+from src.models.losses import CategoricalFocalLoss
 from src.training.resume_utils import load_training_state, save_training_state
 from src.visualization.training_plots import (
     plot_classification_training_results,
@@ -131,7 +132,7 @@ def train_dr_grading(
     print(f"[*] Training Device: {device} | Train samples: {train_size} | Val samples: {val_size}")
 
     model = FundusClassifier(backbone="efficientnet_b0", num_classes=5, pretrained=True).to(device)
-    criterion = nn.CrossEntropyLoss()
+    criterion = CategoricalFocalLoss(gamma=2.0, label_smoothing=0.1)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 

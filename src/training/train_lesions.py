@@ -19,13 +19,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 from src.datasets.idrid_dataset import IDRiDLesionDataset
 from src.datasets.transforms import JointFundusAugmentation
 from src.models.attention_unet import AttentionUNet
-from src.models.losses import DiceBCELoss
+from src.models.losses import MultiChannelFocalDiceLoss
 from src.evaluation.segmentation_metrics import calculate_segmentation_metrics
 from src.training.resume_utils import load_training_state, save_training_state
 from src.visualization.training_plots import (
@@ -35,8 +35,14 @@ from src.visualization.training_plots import (
 )
 
 
-def evaluate(model, data_loader, criterion, device, threshold: float = 0.5):
-    """Evaluates 4-channel lesion segmentation model computing both loss and mean dice."""
+def evaluate(
+    model,
+    data_loader,
+    criterion,
+    device,
+    thresholds: tuple[float, float, float, float] = (0.65, 0.70, 0.50, 0.50)
+):
+    """Evaluates 4-channel lesion segmentation model with per-channel probability thresholds."""
     model.eval()
     val_loss = 0.0
     channel_dices = [[] for _ in range(4)]
@@ -55,7 +61,8 @@ def evaluate(model, data_loader, criterion, device, threshold: float = 0.5):
 
             for i in range(images.size(0)):
                 for c in range(4):
-                    pred_c = (probs[i, c] > threshold).astype(np.uint8) * 255
+                    th = thresholds[c]
+                    pred_c = (probs[i, c] > th).astype(np.uint8) * 255
                     gt_c = (gts[i, c] > 0).astype(np.uint8) * 255
                     m = calculate_segmentation_metrics(pred_c, gt_c)
                     channel_dices[c].append(m["dice"])
@@ -78,11 +85,12 @@ def evaluate(model, data_loader, criterion, device, threshold: float = 0.5):
 def train_lesions(
     train_manifest: str = "manifests/dr_lesions/idrid_lesions_train.csv",
     test_manifest: str = "manifests/dr_lesions/idrid_lesions_test.csv",
-    epochs: int = 15,
+    epochs: int = 25,
     batch_size: int = 2,
     lr: float = 3e-4,
     image_size: int = 512,
     val_split: float = 0.2,
+    patience: int = 6,
     limit: int | None = None,
     output_checkpoint: str = "checkpoints/lesions/best_lesion_model.pth",
     plot_dir: str = "outputs/plots/lesions",
@@ -91,20 +99,24 @@ def train_lesions(
     print("===================================================================")
     print("[*] FUNDUS AI - Training Attention U-Net on IDRiD Retinal Lesions")
     print(f"    Train manifest: {train_manifest} | Epochs: {epochs} | Batch size: {batch_size} | LR: {lr}")
+    print(f"    Early stopping patience: {patience} epochs | MultiChannelFocalDiceLoss active")
     print(f"    Plots output:   {plot_dir}")
     print("===================================================================\n")
 
     aug = JointFundusAugmentation(p_flip_h=0.5, p_flip_v=0.5, p_rotate=0.5, max_angle=20.0)
-    full_dataset = IDRiDLesionDataset(manifest_path=train_manifest, image_size=image_size, transform=aug, limit=limit)
-    test_dataset = IDRiDLesionDataset(manifest_path=test_manifest, image_size=image_size, limit=limit)
 
-    total_train = len(full_dataset)
+    # Strict separation: train gets augmentation, validation stays 100% clean original
+    train_source = IDRiDLesionDataset(manifest_path=train_manifest, image_size=image_size, transform=aug, limit=limit)
+    val_source = IDRiDLesionDataset(manifest_path=train_manifest, image_size=image_size, transform=None, limit=limit)
+    test_dataset = IDRiDLesionDataset(manifest_path=test_manifest, image_size=image_size, transform=None, limit=limit)
+
+    total_train = len(train_source)
     n_val = max(1, int(val_split * total_train))
     n_train = total_train - n_val
-    train_dataset, val_dataset = random_split(
-        full_dataset, [n_train, n_val],
-        generator=torch.Generator().manual_seed(42)
-    )
+
+    indices = torch.randperm(total_train, generator=torch.Generator().manual_seed(42)).tolist()
+    train_dataset = Subset(train_source, indices[:n_train])
+    val_dataset = Subset(val_source, indices[n_train:])
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
@@ -114,13 +126,15 @@ def train_lesions(
     print(f"[*] Training Device: {device} | Train: {n_train} | Val: {n_val} | Isolated Test: {len(test_dataset)}")
 
     model = AttentionUNet(in_channels=3, num_classes=4).to(device)
-    criterion = DiceBCELoss(dice_weight=0.6, bce_weight=0.4)
+    criterion = MultiChannelFocalDiceLoss(focal_weight=0.5, dice_weight=0.5, gamma=2.0, alpha=0.75)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
     out_path = Path(output_checkpoint)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     best_val_dice = 0.0
+    best_epoch = 0
+    patience_counter = 0
 
     history = {
         "loss": [],
@@ -132,6 +146,8 @@ def train_lesions(
     if resume:
         start_epoch, saved = load_training_state(out_path, model, optimizer, scheduler, device, epochs)
         best_val_dice = saved.get("best_val_dice", best_val_dice)
+        best_epoch = saved.get("best_epoch", best_epoch)
+        patience_counter = saved.get("patience_counter", patience_counter)
         history = saved.get("history", history)
 
     for epoch in range(start_epoch, epochs + 1):
@@ -156,7 +172,7 @@ def train_lesions(
         avg_loss = train_loss / max(len(train_loader), 1)
 
         val_res = evaluate(model, val_loader, criterion, device)
-        print(f"Epoch [{epoch:02d}/{epochs:02d}] - Train Loss: {avg_loss:.4f} | Val Loss: {val_res['val_loss']:.4f} | Val Mean Dice: {val_res['mean_dice']:.4f}")
+        print(f"Epoch [{epoch:02d}/{epochs:02d}] - Train Loss: {avg_loss:.4f} | Val Loss: {val_res['val_loss']:.4f} | Val Mean Dice: {val_res['mean_dice']:.4f} (MA: {val_res['ma_dice']:.4f}, HE: {val_res['he_dice']:.4f}, EX: {val_res['ex_dice']:.4f}, SE: {val_res['se_dice']:.4f})")
 
         history["loss"].append(round(avg_loss, 4))
         history["val_loss"].append(round(val_res["val_loss"], 4))
@@ -164,13 +180,23 @@ def train_lesions(
 
         if val_res["mean_dice"] > best_val_dice:
             best_val_dice = val_res["mean_dice"]
+            best_epoch = epoch
+            patience_counter = 0
             torch.save(model.state_dict(), str(out_path))
             print(f"  [+] Saved new best lesion checkpoint to: {out_path} (Val Mean Dice: {best_val_dice:.4f})")
+        else:
+            patience_counter += 1
+            print(f"  [-] Val Mean Dice did not improve. Early stopping counter: {patience_counter}/{patience}")
+            if patience_counter >= patience:
+                print(f"\n[!] Early stopping triggered at epoch {epoch}. Best epoch was Epoch {best_epoch} with Val Mean Dice: {best_val_dice:.4f}")
+                save_training_state(out_path, epoch, model, optimizer, scheduler, finished=True,
+                                    best_val_dice=best_val_dice, best_epoch=best_epoch, patience_counter=patience_counter, history=history)
+                break
 
         save_training_state(out_path, epoch, model, optimizer, scheduler,
-                            best_val_dice=best_val_dice, history=history)
+                            best_val_dice=best_val_dice, best_epoch=best_epoch, patience_counter=patience_counter, history=history)
 
-    print(f"\n[OK] IDRiD Lesion Training complete! Best Val Mean Dice: {best_val_dice:.4f}")
+    print(f"\n[OK] IDRiD Lesion Training complete! Best Val Mean Dice: {best_val_dice:.4f} (at Epoch {best_epoch})")
     print(f"     Checkpoint saved to: {out_path.resolve()}")
 
     # Reload best checkpoint for plotting and evaluation
@@ -210,11 +236,12 @@ def main():
     parser = argparse.ArgumentParser(description="Train Attention U-Net on IDRiD Lesions")
     parser.add_argument("--train_manifest", type=str, default="manifests/dr_lesions/idrid_lesions_train.csv")
     parser.add_argument("--test_manifest", type=str, default="manifests/dr_lesions/idrid_lesions_test.csv")
-    parser.add_argument("--epochs", type=int, default=15)
+    parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--image_size", type=int, default=512)
     parser.add_argument("--val_split", type=float, default=0.2)
+    parser.add_argument("--patience", type=int, default=6)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--output_checkpoint", type=str, default="checkpoints/lesions/best_lesion_model.pth")
     parser.add_argument("--plot_dir", type=str, default="outputs/plots/lesions")
@@ -229,6 +256,7 @@ def main():
         lr=args.lr,
         image_size=args.image_size,
         val_split=args.val_split,
+        patience=args.patience,
         limit=args.limit,
         output_checkpoint=args.output_checkpoint,
         plot_dir=args.plot_dir,

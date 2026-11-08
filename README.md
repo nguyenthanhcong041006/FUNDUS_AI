@@ -62,13 +62,13 @@ eyes/
 │   ├── classification/           # Chấm điểm DR, nguy cơ Glaucoma, AMD, Cao huyết áp
 │   └── visualization/            # Bảng báo cáo 6 khung hình, overlay chẩn đoán đa tầng
 ├── checkpoints/                  # Trọng số mô hình đã huấn luyện (.pth)
-│   ├── optic_disc_cup/           # best_od_oc_model.pth (M1: REFUGE2)
-│   ├── vessels/                  # best_vessel_model.pth (M2: DRIVE)
-│   ├── artery_vein/              # best_av_model.pth (M3: RITE)
-│   ├── lesions/                  # best_lesion_model.pth (M4: IDRiD)
-│   └── classification/           # best_dr_grading.pth (M5), best_multilabel.pth (M6)
+│   ├── optic_disc_cup/           # best_od_oc_model.pth (M1: REFUGE2, Val Mean Dice: 0.7806)
+│   ├── vessels/                  # best_vessel_model.pth (M2: DRIVE, Val Dice: 0.7253)
+│   ├── artery_vein/              # best_av_model.pth (M3: RITE, Val Mean Dice: 0.5689)
+│   ├── lesions/                  # best_lesion_model.pth (M4: IDRiD, Multi-channel 4 classes)
+│   └── classification/           # best_dr_classifier.pth (M5: QWK 0.9176), best_odir_classifier.pth (M6: F1 0.5897)
 ├── outputs/                      # Báo cáo, bảng tổng hợp và hình ảnh xuất ra
-├── tests/                        # 15 unit tests tự động kiểm thử toàn bộ hệ thống
+├── tests/                        # 22 unit tests tự động kiểm thử toàn bộ hệ thống
 ├── main.py                       # CLI Runner chính chạy toàn bộ Pipeline End-to-End
 ├── conftest.py                   # Cấu hình đường dẫn gốc cho Pytest
 └── requirements.txt              # Danh sách thư viện Python
@@ -142,24 +142,27 @@ flowchart TD
 
 ### Bước 5 — Anatomical Structure Segmentation (Phân đoạn cấu trúc giải phẫu)
 * **Phân đoạn Đĩa thị (Optic Disc) & Hõm gai thị (Optic Cup):**
-  * Nạp mô hình **U-Net 2 kênh** (`checkpoints/optic_disc_cup/best_od_oc_model.pth` được huấn luyện trên Drishti-GS1).
+  * Nạp mô hình **U-Net 2 kênh** (`checkpoints/optic_disc_cup/best_od_oc_model.pth` huấn luyện trên REFUGE2).
   * Kênh 0 dự đoán mặt nạ Đĩa thị; Kênh 1 dự đoán Hõm gai thị.
-  * Ràng buộc giải phẫu học tự động: Ép Hõm gai thị luôn nằm trọn vẹn bên trong Đĩa thị (`cv2.bitwise_and`).
+  * **Hậu xử lý giải phẫu:** Áp dụng `cv2.connectedComponentsWithStats` chọn duy nhất 1 thành phần liên thông lớn nhất kết hợp mặt nạ viền co `eroded_fov` để xóa sổ hoàn toàn các vệt quang sai lóa sáng hình lưỡi liềm ở rìa ống kính (như ảnh `V0002`).
+  * **Ràng buộc giải phẫu học:** Ép Hõm gai thị luôn nằm trọn vẹn bên trong Đĩa thị (`oc_mask = cv2.bitwise_and(oc_mask, od_mask)`).
 * **Phân đoạn Mạng lưới Mạch máu (Retinal Blood Vessels):**
-  * Nạp mô hình **U-Net binary** (`checkpoints/vessels/best_vessel_model.pth` được huấn luyện trên DRIVE).
+  * Nạp mô hình **U-Net binary** (`checkpoints/vessels/best_vessel_model.pth` huấn luyện trên DRIVE).
   * Trích xuất toàn bộ cây mao mạch và tĩnh/động mạch chính thành mask nhị phân 0/255.
-* **Phân loại Động mạch / Tĩnh mạch:**
-  * Mô hình 3 lớp phân biệt động mạch (đỏ), tĩnh mạch (xanh dương) hỗ trợ đo tỷ lệ A/V.
+  * Tự động lọc sạch các hạt nhiễu li ti rời rạc bằng bộ lọc hình thái học `remove_small_objects(min_size=30)`.
+* **Phân loại Động mạch / Tĩnh mạch (Artery / Vein):**
+  * Mô hình 3 lớp phân biệt nền võng mạc (0), động mạch (1 - đỏ), tĩnh mạch (2 - xanh dương) trên RITE, lọc nhiễu hạt `remove_small_objects(min_size=30)` phục vụ đo tỷ lệ AVR chuẩn lâm sàng tại Zone B.
 * **Định vị Hoàng điểm & Hõm trung tâm (Fovea & Macula Localization):**
   * Dựa trên vị trí giải phẫu: Hoàng điểm luôn nằm về phía thái dương (temporal) cách tâm đĩa thị một khoảng cố định bằng 2.0 - 2.5 lần đường kính đĩa thị.
   * Thuật toán tự động tìm tâm vùng vô mạch hoàng điểm (FAZ) - điểm trũng tối nhất trong kênh Green trong vùng tìm kiếm kỳ vọng.
 
 ### Bước 6 — Retinal Lesion Segmentation (Phát hiện vi tổn thương võng mạc)
-* **Vi phình mạch (Microaneurysms - MA):** Dò tìm các chấm đỏ cực nhỏ (20-100 µm) xuất hiện sớm nhất ở bệnh nhân đái tháo đường.
-* **Xuất huyết võng mạc (Haemorrhages - HE):** Phát hiện các đốm máu sẫm màu dạng ngọn lửa hoặc chấm đốm.
-* **Xuất tiết cứng (Hard Exudates - EX):** Phát hiện các mảng lipid màu vàng sáng có bờ sắc nét, xuất hiện do rò rỉ dịch mạch máu mạn tính.
-* **Đốm bông / Xuất tiết mềm (Cotton Wool Spots - CWS/SE):** Phát hiện các vùng nhồi máu lớp sợi thần kinh màu trắng đục có bờ mờ nhạt.
-* **Drusen:** Phát hiện các đốm thoái hóa màng Bruch dưới biểu mô sắc tố (dấu hiệu cảnh báo AMD).
+* **Vi phình mạch (Microaneurysms - MA):** Dò tìm các chấm đỏ cực nhỏ (ngưỡng xác suất $p \ge 0.65$).
+* **Xuất huyết võng mạc (Haemorrhages - HE):** Phát hiện đốm máu sẫm màu với ngưỡng nâng cao $p \ge 0.70$ để triệt tiêu hiện tượng bùng nổ mảng đỏ (False Positive).
+* **Xuất tiết cứng (Hard Exudates - EX):** Phát hiện mảng lipid màu vàng sáng có bờ sắc nét ($p \ge 0.50$).
+* **Đốm bông / Xuất tiết mềm (Cotton Wool Spots - CWS/SE):** Phát hiện vùng nhồi máu lớp sợi thần kinh màu trắng đục ($p \ge 0.50$).
+* **Mặt nạ loại trừ giải phẫu (Anatomical Exclusion Mask):** Tự động loại bỏ mọi tổn thương giả nằm đè lên mạng lưới mạch máu, đĩa thị hoặc rìa ngoài nhãn cầu:
+  $$\text{ValidRetina} = \text{ErodedFOV} \cap \neg (\text{VesselMask} \cup \text{OpticDiscMask})$$
 
 ### Bước 7 — Quantitative Biomarkers Extraction (Trích xuất chỉ số sinh học định lượng)
 * **Chỉ số Gai thị (Optic Nerve Biomarkers):**
@@ -215,7 +218,7 @@ from main import run_pipeline
 
 # Chạy phân tích ảnh đáy mắt và nhận kết quả dạng Dictionary
 results = run_pipeline(
-    image_path="datasets/raw/Drishti-GS1/Drishti-GS1_files/Test/Images/drishtiGS_001.png",
+    image_path="datasets/raw/REFUGE2/Train/REFUGE1-val/REFUGE-Validation400/V0001.jpg",
     output_dir="outputs/patient_001",
     target_size=512
 )
@@ -297,23 +300,23 @@ python src/training/train_artery_vein.py --epochs 20 --batch_size 2 --image_size
 * **Checkpoint:** `checkpoints/artery_vein/best_av_model.pth`.
 
 #### 1.4 Phân đoạn Vi tổn thương đáy mắt (Module M4 — Multi-channel U-Net trên IDRiD)
-* **Tác vụ:** Phân đoạn 4 loại tổn thương đái tháo đường: MA (Microaneurysms), HE (Haemorrhages), EX (Hard Exudates), SE (Soft Exudates).
+* **Tác vụ:** Phân đoạn 4 loại tổn thương đái tháo đường: MA (Microaneurysms), HE (Haemorrhages), EX (Hard Exudates), SE (Soft Exudates) với hàm mất mát `MultiChannelFocalDiceLoss` và Early Stopping.
 ```powershell
-python src/training/train_lesions.py --epochs 25 --batch_size 2 --image_size 512
+python src/training/train_lesions.py --epochs 25 --batch_size 2 --image_size 512 --patience 6
 ```
 * **Checkpoint:** `checkpoints/lesions/best_lesion_model.pth`.
 
 #### 1.5 Phân loại Mức độ Bệnh võng mạc Đái tháo đường (Module M5 — EfficientNet-B0 trên APTOS)
-* **Tác vụ:** Phân loại 5 cấp độ DR (0: No DR, 1: Mild, 2: Moderate, 3: Severe, 4: Proliferative DR).
+* **Tác vụ:** Phân loại 5 cấp độ DR (0: No DR, 1: Mild, 2: Moderate, 3: Severe, 4: Proliferative DR) với `CategoricalFocalLoss(gamma=2.0, label_smoothing=0.1)` và Early Stopping (Best QWK: 0.9176).
 ```powershell
-python src/training/train_dr_grading.py --epochs 15 --batch_size 16 --image_size 512
+python src/training/train_dr_grading.py --epochs 20 --batch_size 12 --image_size 512 --patience 6
 ```
 * **Checkpoint:** `checkpoints/classification/best_dr_classifier.pth`.
 
 #### 1.6 Phân loại Đa bệnh lý Đáy mắt (Module M6 — DenseNet-121 trên ODIR-5K)
-* **Tác vụ:** Dự đoán xác suất 8 nhóm bệnh lý độc lập (N, D, G, C, A, H, M, O) với chia tách dữ liệu theo bệnh nhân.
+* **Tác vụ:** Dự đoán xác suất 8 nhóm bệnh lý độc lập (N, D, G, C, A, H, M, O) lưu checkpoint tối ưu theo Macro F1 Score (Best Macro F1: 0.5897).
 ```powershell
-python src/training/train_multi_disease.py --epochs 15 --batch_size 16 --image_size 512
+python src/training/train_multi_disease.py --epochs 30 --batch_size 8 --image_size 512
 ```
 * **Checkpoint:** `checkpoints/classification/best_odir_classifier.pth`.
 
@@ -321,11 +324,11 @@ python src/training/train_multi_disease.py --epochs 15 --batch_size 16 --image_s
 
 ### Giai đoạn 2: Kiểm thử Toàn vẹn Hệ thống (Automated Unit Tests)
 
-Chạy bộ kiểm thử tự động toàn diện kiểm tra DataLoaders, các phép đo hình thái học và luồng pipeline:
+Chạy bộ kiểm thử tự động toàn diện kiểm tra GroupNorm U-Net, CategoricalFocalLoss, DataLoaders, các phép đo hình thái học và luồng pipeline:
 ```powershell
 pytest tests/ -v
 ```
-*(Yêu cầu: Toàn bộ **15/15 tests** đều hiển thị màu xanh lá `PASSED`)*.
+*(Yêu cầu: Toàn bộ **22/22 tests** đều hiển thị màu xanh lá `PASSED`)*.
 
 ---
 

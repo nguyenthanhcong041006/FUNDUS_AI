@@ -510,8 +510,6 @@ def main():
     build_idrid_lesion_manifests(raw_root, manifests_root / "dr_lesions")
     build_aptos_manifests(raw_root, manifests_root / "dr_grading")
     build_odir_manifests(raw_root, manifests_root / "multi_disease")
-    build_drishti_manifests(raw_root, manifests_root / "optic_disc_cup")
-    build_papila_manifests(raw_root, manifests_root / "optic_disc_cup")
     build_refuge2_manifests(raw_root, manifests_root / "optic_disc_cup")
 
     print("\n[OK] All manifest files generated successfully in manifests/")

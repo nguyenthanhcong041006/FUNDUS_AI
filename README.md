@@ -35,17 +35,15 @@ Fundus Image ──► Quality Assessment (Blur, Brightness, Contrast, FOV)
 ```text
 eyes/
 ├── datasets/                     # Thư mục chứa các bộ dữ liệu đáy mắt
-│   └── raw/                      # Dữ liệu ảnh và nhãn gốc (Datasets hiện có)
+│   └── raw/                      # Dữ liệu ảnh và nhãn gốc (6 Gold-Standard Datasets)
 │       ├── REFUGE2/              # [M1] Optic Disc & Cup + Glaucoma (1.200 ảnh: Train 400, Val 400, Test 400)
-│       ├── Drishti-GS1/          # [M1] Optic Disc & Cup (101 ảnh: 50 train, 51 test, SoftMaps, CDR ref)
-│       ├── PAPILA/               # [M1] External Validation Glaucoma & OD/OC (488 ảnh, 244 bệnh nhân)
 │       ├── drive/                # [M2] Retinal Blood Vessel Segmentation (40 ảnh: 20 train, 20 test)
 │       ├── rite/                 # [M3] Artery/Vein 3-Class Segmentation (40 ảnh)
 │       ├── idrid/                # [M4] Multi-Lesion Segmentation: MA, HE, EX, SE (81 ảnh)
 │       ├── aptos/                # [M5] DR Severity 5-Grade Classification (3.662 ảnh train)
 │       └── odir/                 # [M6] Multi-Disease 8-Class Classification (3.500 bệnh nhân ODIR-5K)
 ├── manifests/                    # Danh sách CSV chuẩn hóa quản lý đường dẫn tương đối (Relative POSIX)
-│   ├── optic_disc_cup/           # refuge2_train/val/test/all.csv, drishti_train/test.csv, papila_external_test.csv
+│   ├── optic_disc_cup/           # refuge2_train.csv, refuge2_val.csv, refuge2_test.csv, refuge2_all.csv
 │   ├── vessel/                   # drive_train.csv, drive_test.csv
 │   ├── artery_vein/              # rite_train.csv, rite_test.csv
 │   ├── dr_lesions/               # idrid_lesions_train.csv, idrid_lesions_test.csv
@@ -53,10 +51,10 @@ eyes/
 │   └── multi_disease/            # odir_train.csv, odir_val.csv (phân tách theo patient_id)
 ├── configs/                      # File cấu hình tham số tiền xử lý và mô hình (YAML)
 ├── src/                          # Mã nguồn module hóa
-│   ├── datasets/                 # PyTorch DataLoaders (Drishti, PAPILA, DRIVE, RITE, IDRiD, APTOS, ODIR)
+│   ├── datasets/                 # PyTorch DataLoaders (REFUGE2, DRIVE, RITE, IDRiD, APTOS, ODIR)
 │   ├── models/                   # U-Net, Attention U-Net, EfficientNet, DenseNet-121, MultiChannelLosses
 │   ├── training/                 # Scripts huấn luyện từng module chuyên biệt
-│   ├── evaluation/               # Scripts đánh giá hiệu năng (Internal & External Validation)
+│   ├── evaluation/               # Scripts đánh giá hiệu năng (Segmentation & Classification Benchmarks)
 │   ├── preprocessing/            # Quality assessment, FOV aperture, Green-CLAHE normalization
 │   ├── anatomical/               # Deep Learning Segmenters (Optic Disc, Cup, Vessels, Fovea)
 │   ├── lesions/                  # Phát hiện vi tổn thương võng mạc (MA, HE, EX, SE)
@@ -64,7 +62,7 @@ eyes/
 │   ├── classification/           # Chấm điểm DR, nguy cơ Glaucoma, AMD, Cao huyết áp
 │   └── visualization/            # Bảng báo cáo 6 khung hình, overlay chẩn đoán đa tầng
 ├── checkpoints/                  # Trọng số mô hình đã huấn luyện (.pth)
-│   ├── optic_disc_cup/           # best_od_oc_model.pth (M1: Drishti-GS1)
+│   ├── optic_disc_cup/           # best_od_oc_model.pth (M1: REFUGE2)
 │   ├── vessels/                  # best_vessel_model.pth (M2: DRIVE)
 │   ├── artery_vein/              # best_av_model.pth (M3: RITE)
 │   ├── lesions/                  # best_lesion_model.pth (M4: IDRiD)
@@ -250,7 +248,7 @@ python src/datasets/build_manifests.py
 ```
 
 * **Kết quả tạo ra trong `manifests/`:**
-  * `optic_disc_cup/`: `refuge2_train.csv` (400 ảnh), `refuge2_val.csv` (400 ảnh), `refuge2_test.csv` (400 ảnh), `refuge2_all.csv` (1.200 ảnh), `drishti_train.csv` (50 ảnh), `drishti_test.csv` (51 ảnh), `papila_external_test.csv` (488 ảnh).
+  * `optic_disc_cup/`: `refuge2_train.csv` (400 ảnh), `refuge2_val.csv` (400 ảnh), `refuge2_test.csv` (400 ảnh), `refuge2_all.csv` (1.200 ảnh).
   * `vessel/`: `drive_train.csv` (20 ảnh), `drive_test.csv` (20 ảnh).
   * `artery_vein/`: `rite_train.csv` (20 ảnh), `rite_test.csv` (20 ảnh).
   * `dr_lesions/`: `idrid_lesions_train.csv` (54 ảnh), `idrid_lesions_test.csv` (27 ảnh).
@@ -264,7 +262,7 @@ python src/datasets/build_manifests.py
 Mỗi mô hình chịu trách nhiệm một tác vụ chuyên biệt theo thiết kế chuẩn của **FUNDUS_AI_Dataset_Training_Plan_2.md**:
 
 #### 1.1 Phân đoạn Mạch máu võng mạc (Module M2 — U-Net trên DRIVE)
-* **Nguyên tắc:** Huấn luyện và đánh giá trên bộ dữ liệu **DRIVE** trước. Giữ STARE làm **External Validation** sau khi mô hình đã ổn định.
+* **Nguyên tắc:** Huấn luyện và đánh giá trên bộ dữ liệu **DRIVE** chuẩn.
 ```powershell
 # Huấn luyện U-Net trên DRIVE training set:
 python src/training/train_vessels.py --epochs 30 --batch_size 4 --image_size 512
@@ -275,26 +273,21 @@ python src/evaluation/evaluate_vessels.py --checkpoint checkpoints/vessels/best_
 * **Checkpoint:** `checkpoints/vessels/best_vessel_model.pth`.
 * **Kết quả chi tiết:** `outputs/vessel_evaluation_results.csv`.
 
-#### 1.2 Phân đoạn Đĩa thị & Hõm gai thị (Module M1 — U-Net trên REFUGE2, Drishti-GS1 & PAPILA)
-* **Nguyên tắc:** 
-  * **REFUGE2** (1.200 ảnh: Train 400, Val 400, Test 400) là tập huấn luyện và đánh giá chính quy mô lớn chuẩn MICCAI.
-  * **Drishti-GS1** (101 ảnh) và **PAPILA** (488 ảnh) dùng làm tập kiểm thử ngoại vi độc lập (External Validation) đánh giá khả năng tổng quát hóa trên các dòng máy chụp khác nhau.
+#### 1.2 Phân đoạn Đĩa thị & Hõm gai thị (Module M1 — U-Net trên REFUGE2)
+* **Nguyên tắc:** **REFUGE2** (1.200 ảnh: Train 400, Val 400, Test 400) là tập benchmark chuẩn MICCAI độc lập cho phân đoạn Đĩa thị (OD), Hõm gai thị (Cup), đo tỷ lệ vCDR và sàng lọc Glaucoma.
 ```powershell
-# 1. Huấn luyện U-Net 2 kênh (Channel 0: Optic Disc, Channel 1: Optic Cup) trên REFUGE2 (Mặc định):
-python src/training/train_optic_disc_cup.py --dataset refuge2 --epochs 20 --batch_size 4 --image_size 512
+# 1. Huấn luyện U-Net 2 kênh (Channel 0: Optic Disc, Channel 1: Optic Cup) trên REFUGE2:
+python src/training/train_optic_disc_cup.py --epochs 25 --batch_size 4 --image_size 512
 
-# Hoặc huấn luyện trên Drishti-GS1 nếu muốn benchmark quy mô nhỏ:
-python src/training/train_optic_disc_cup.py --dataset drishti --epochs 20 --batch_size 2 --image_size 512
+# 2. Đánh giá kiểm thử độc lập trên REFUGE2 test set (400 ảnh):
+python src/training/train_optic_disc_cup.py --eval_only --test_manifest manifests/optic_disc_cup/refuge2_test.csv --image_size 512
 
-# 2. Đánh giá External Validation chéo trên Drishti-GS1 test set:
-python src/training/train_optic_disc_cup.py --eval_only --test_manifest manifests/optic_disc_cup/drishti_test.csv --image_size 512
-
-# 3. Đánh giá toàn diện cả Internal Test và External Validation (PAPILA):
-python src/evaluation/evaluate_optic_disc_cup.py --image_size 512
+# 3. Đánh giá toàn diện Segmentation, vCDR MAE và Glaucoma Screening (ROC-AUC):
+python src/evaluation/evaluate_optic_disc_cup.py --manifest manifests/optic_disc_cup/refuge2_test.csv --image_size 512
 ```
 * **Checkpoint:** `checkpoints/optic_disc_cup/best_od_oc_model.pth`.
-* **Biểu đồ & Analytics:** `outputs/plots/optic_disc_cup/refuge2_training_curves.png`, `refuge2_sample_predictions.png`, `refuge2_training_history.csv`.
-* **Kết quả chi tiết:** `outputs/optic_disc_cup_internal_evaluation.csv` & `outputs/optic_disc_cup_external_evaluation.csv`.
+* **Biểu đồ & Analytics:** `outputs/plots/optic_disc_cup/history.csv`, `outputs/plots/optic_disc_cup/`.
+* **Kết quả chi tiết:** `outputs/optic_disc_cup_refuge2_evaluation.csv`.
 
 #### 1.3 Phân biệt Động mạch / Tĩnh mạch (Module M3 — U-Net 3-Class trên RITE)
 * **Tác vụ:** Phân loại pixel 3 lớp: Nền võng mạc (0), Động mạch (1), Tĩnh mạch (2).
@@ -347,11 +340,8 @@ python main.py --demo --output_dir outputs/sample_demo
 
 #### 3.2 Chạy phân tích trên 1 ảnh bệnh nhân cụ thể:
 ```powershell
-# Chạy ảnh bất kỳ từ Drishti-GS1:
-python main.py --image "datasets/raw/Drishti-GS1/Drishti-GS1_files/Test/Images/drishtiGS_001.png" --output_dir "outputs/patient_drishti_001"
-
-# Chạy ảnh bất kỳ từ PAPILA:
-python main.py --image "datasets/raw/PAPILA/FundusImages/RET002OD.jpg" --output_dir "outputs/patient_papila_002"
+# Chạy ảnh bất kỳ từ REFUGE2:
+python main.py --image "datasets/raw/REFUGE2/Train/REFUGE1-val/REFUGE-Validation400/V0001.jpg" --output_dir "outputs/patient_refuge_001"
 
 # Chạy ảnh từ DRIVE:
 python main.py --image "datasets/raw/drive/test/images/01_test.tif" --output_dir "outputs/patient_drive_001"
@@ -360,11 +350,8 @@ python main.py --image "datasets/raw/drive/test/images/01_test.tif" --output_dir
 #### 3.3 Chạy hàng loạt (Batch Processing) theo từng Dataset:
 Hệ thống hỗ trợ phím tắt `--dataset` để tự động lấy ảnh từ các thư mục dữ liệu tương ứng:
 ```powershell
-# Chạy 5 ảnh đầu tiên của Drishti-GS1:
-python main.py --dataset drishti --limit 5 --output_dir "outputs/batch_drishti"
-
-# Chạy 5 ảnh đầu tiên của PAPILA:
-python main.py --dataset papila --limit 5 --output_dir "outputs/batch_papila"
+# Chạy 5 ảnh đầu tiên của REFUGE2:
+python main.py --dataset refuge --limit 5 --output_dir "outputs/batch_refuge"
 
 # Chạy 5 ảnh đầu tiên của DRIVE:
 python main.py --dataset drive --limit 5 --output_dir "outputs/batch_drive"
@@ -379,8 +366,8 @@ python main.py --dataset idrid --limit 5 --output_dir "outputs/batch_idrid"
 python main.py --dataset odir --limit 5 --output_dir "outputs/batch_odir"
 ```
 
-#### 3.4 Chạy Benchmark Hàng loạt trên TẤT CẢ các bộ dữ liệu cùng lúc:
-Lệnh này sẽ tự động duyệt qua tất cả 7 dataset (`drive`, `rite`, `drishti`, `papila`, `aptos`, `idrid`, `odir`), xử lý số ảnh được chọn và tổng hợp thành 1 bảng so sánh duy nhất:
+#### 3.4 Chạy Benchmark Hàng loạt trên TẤT CẢ 6 bộ dữ liệu cùng lúc:
+Lệnh này sẽ tự động duyệt qua tất cả 6 dataset (`refuge`, `drive`, `rite`, `aptos`, `idrid`, `odir`), xử lý số ảnh được chọn và tổng hợp thành 1 bảng so sánh duy nhất:
 ```powershell
 python main.py --dataset all --limit 2 --output_dir "outputs/benchmark_all_datasets"
 ```

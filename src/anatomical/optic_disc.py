@@ -25,13 +25,8 @@ class OpticDiscSegmenter:
                 p = cand
         if p.is_file():
             try:
-                import torch
-                from src.models.unet import UNet
-                net = UNet(in_channels=3, num_classes=2)
-                state = torch.load(str(p), map_location="cpu")
-                net.load_state_dict(state)
-                net.eval()
-                self.model = net
+                from src.models.unet import load_checkpoint_unet
+                self.model = load_checkpoint_unet(str(p), in_channels=3, num_classes=2, map_location="cpu")
                 print(f"     [U-Net Model Active] Loaded OD/OC checkpoint: {p}")
             except Exception as e:
                 print(f"     [U-Net Load Warning] Falling back to morphology: {e}")
@@ -67,8 +62,22 @@ class OpticDiscSegmenter:
             pred_512 = (prob > 0.5).astype(np.uint8) * 255
             # Restore mask to exact native resolution
             od_mask = unpad_mask(pred_512, pad_meta)
+
+            # Post-processing: Erode FOV to eliminate crescent boundary artifacts
             if fov_mask is not None:
-                od_mask = cv2.bitwise_and(od_mask, fov_mask)
+                kernel_fov = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21))
+                eroded_fov = cv2.erode(fov_mask, kernel_fov, iterations=1)
+                od_mask = cv2.bitwise_and(od_mask, eroded_fov)
+
+            # Connected component filtering: retain only the single largest connected region (Optic Disc)
+            num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(od_mask, connectivity=8)
+            if num_labels > 1:
+                areas = stats[1:, cv2.CC_STAT_AREA]
+                max_label = 1 + int(np.argmax(areas))
+                if stats[max_label, cv2.CC_STAT_AREA] >= 40:
+                    od_mask = np.where(labels == max_label, np.uint8(255), np.uint8(0))
+                else:
+                    od_mask = np.zeros_like(od_mask)
         else:
             # Robust candidate heuristic fallback for unweighted pipeline testing:
             gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)

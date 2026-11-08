@@ -145,6 +145,15 @@ def run_pipeline(
     vessel_segmenter = VesselSegmenter()
     vessel_mask, vessel_metrics = vessel_segmenter.segment(image_bgr, fov_mask=fov_mask)
 
+    # Build anatomical exclusion mask (Optic Disc + Blood Vessels + Peripheral Boundary)
+    exclusion_mask = cv2.bitwise_or(vessel_mask, od_mask)
+    if fov_mask is not None:
+        kernel_fov = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        eroded_fov = cv2.erode(fov_mask, kernel_fov, iterations=1)
+        valid_retina = cv2.bitwise_and(eroded_fov, cv2.bitwise_not(exclusion_mask))
+    else:
+        valid_retina = cv2.bitwise_not(exclusion_mask)
+
     print("  -> Localizing Fovea and Macular Zone...")
     fovea_detector = FoveaDetector()
     fovea_data, macula_mask = fovea_detector.detect(image_bgr, od_metrics=od_metrics, fov_mask=fov_mask)
@@ -168,6 +177,12 @@ def run_pipeline(
 
     cws_det = CottonWoolSpotDetector()
     cws_mask, cws_list, cws_summary = cws_det.detect(image_bgr, fov_mask=fov_mask, od_mask=od_mask)
+
+    # Apply Anatomical Exclusion Mask: lesions cannot exist inside vessels, on the optic disc, or outside retina
+    ma_mask = cv2.bitwise_and(ma_mask, valid_retina)
+    he_mask = cv2.bitwise_and(he_mask, valid_retina)
+    ex_mask = cv2.bitwise_and(ex_mask, valid_retina)
+    cws_mask = cv2.bitwise_and(cws_mask, valid_retina)
 
     # 7. Quantitative Measurements Engine
     print("  -> Computing Quantitative Measurements...")
@@ -325,8 +340,6 @@ DATASET_DIRS = {
     "idrid": "datasets/raw/idrid/A. Segmentation/1. Original Images/a. Training Set",
     "odir": "datasets/raw/odir/ODIR-5K_Training_Dataset",
     "rite": "datasets/raw/rite/training/images",
-    "drishti": "datasets/raw/Drishti-GS1/Drishti-GS1_files/Training/Images",
-    "papila": "datasets/raw/PAPILA/FundusImages",
     "refuge": "datasets/raw/REFUGE2/Train/REFUGE1-val/REFUGE-Validation400",
 }
 
@@ -351,7 +364,7 @@ def run_batch(
         dataset_name = "custom"
         for part in img_path.parts:
             part_clean = part.lower().replace("-", "_")
-            if part_clean in ["drive", "aptos", "idrid", "odir", "rite", "drishti_gs1", "papila", "refuge2"]:
+            if part_clean in ["drive", "aptos", "idrid", "odir", "rite", "refuge2", "refuge"]:
                 dataset_name = part_clean
                 break
         img_out_dir = out_root / f"{dataset_name}_{img_path.stem}"
@@ -395,7 +408,7 @@ def main():
     parser = argparse.ArgumentParser(description="FUNDUS AI Complete Retinal Analysis Pipeline")
     parser.add_argument("--image", type=str, default=None, help="Path to a single retinal fundus image")
     parser.add_argument("--input_dir", type=str, default=None, help="Path to directory containing images")
-    parser.add_argument("--dataset", type=str, default=None, choices=["drive", "aptos", "idrid", "odir", "rite", "drishti", "papila", "refuge", "all"],
+    parser.add_argument("--dataset", type=str, default=None, choices=["drive", "aptos", "idrid", "odir", "rite", "refuge", "all"],
                         help="Dataset shortcut name to automatically select images from datasets/raw")
     parser.add_argument("--limit", type=int, default=None, help="Maximum number of images to process (e.g. 3 or 5)")
     parser.add_argument("--output_dir", type=str, default="outputs/sample_001", help="Output directory")

@@ -84,6 +84,7 @@ def train_vessels(
     lr: float = 3e-4,
     image_size: int = 512,
     val_split: float = 0.2,
+    patience: int = 6,
     limit: int | None = None,
     output_checkpoint: str = "checkpoints/vessels/best_vessel_model.pth",
     plot_dir: str = "outputs/plots/vessels"
@@ -93,10 +94,19 @@ def train_vessels(
     print(f"    Train manifest: {train_manifest}")
     print(f"    Test manifest:  {test_manifest}")
     print(f"    Epochs: {epochs} | Batch size: {batch_size} | Size: {image_size}x{image_size} | LR: {lr}")
+    print(f"    Early stopping patience: {patience} epochs")
     print(f"    Plots output:   {plot_dir}")
     print("===================================================================\n")
 
-    aug = JointFundusAugmentation(p_flip_h=0.5, p_flip_v=0.5, p_rotate=0.5, max_angle=20.0)
+    aug = JointFundusAugmentation(
+        p_flip_h=0.5,
+        p_flip_v=0.5,
+        p_rotate=0.7,
+        max_angle=45.0,
+        p_scale=0.5,
+        p_jitter=0.6,
+        p_clahe=0.5
+    )
     full_dataset = DRIVEManifestDataset(manifest_path=train_manifest, image_size=image_size, transform=aug, limit=limit)
     test_dataset = DRIVEManifestDataset(manifest_path=test_manifest, image_size=image_size, limit=limit)
 
@@ -122,6 +132,8 @@ def train_vessels(
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
     best_val_dice = 0.0
+    best_epoch = 0
+    patience_counter = 0
     out_path = Path(output_checkpoint)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -170,11 +182,19 @@ def train_vessels(
         # Checkpoint selection strictly based on validation performance
         if val_res["dice"] > best_val_dice:
             best_val_dice = val_res["dice"]
+            best_epoch = epoch
+            patience_counter = 0
             torch.save(model.state_dict(), str(out_path))
             print(f"  [+] Saved new best model checkpoint to: {out_path} (Val Dice: {best_val_dice:.4f})")
+        else:
+            patience_counter += 1
+            print(f"  [-] Val Dice did not improve. Early stopping counter: {patience_counter}/{patience}")
+            if patience_counter >= patience:
+                print(f"\n[!] Early stopping triggered at epoch {epoch}. Best epoch was Epoch {best_epoch} with Val Dice: {best_val_dice:.4f}")
+                break
 
-    print("\n[OK] Training & Validation on DRIVE complete!")
-    print(f"     Best Checkpoint: {out_path.resolve()} (Best Val Dice: {best_val_dice:.4f})")
+    print(f"\n[OK] Training & Validation on DRIVE complete! Best Val Dice: {best_val_dice:.4f} (at Epoch {best_epoch})")
+    print(f"     Best Checkpoint: {out_path.resolve()}")
 
     # Reload best checkpoint for plotting and external evaluation
     if out_path.is_file():
@@ -218,6 +238,7 @@ def main():
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--image_size", type=int, default=512)
     parser.add_argument("--val_split", type=float, default=0.2)
+    parser.add_argument("--patience", type=int, default=6, help="Early stopping patience in epochs")
     parser.add_argument("--limit", type=int, default=None, help="Limit samples for dry run")
     parser.add_argument("--output_checkpoint", type=str, default="checkpoints/vessels/best_vessel_model.pth")
     parser.add_argument("--plot_dir", type=str, default="outputs/plots/vessels", help="Directory to save training curves and sample plots")
@@ -246,6 +267,7 @@ def main():
             lr=args.lr,
             image_size=args.image_size,
             val_split=args.val_split,
+            patience=args.patience,
             limit=args.limit,
             output_checkpoint=args.output_checkpoint,
             plot_dir=args.plot_dir

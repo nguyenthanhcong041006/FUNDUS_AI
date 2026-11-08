@@ -88,6 +88,7 @@ def train_artery_vein(
     lr: float = 3e-4,
     image_size: int = 512,
     val_split: float = 0.2,
+    patience: int = 6,
     limit: int | None = None,
     output_checkpoint: str = "checkpoints/artery_vein/best_av_model.pth",
     plot_dir: str = "outputs/plots/artery_vein"
@@ -95,10 +96,19 @@ def train_artery_vein(
     print("===================================================================")
     print("[*] FUNDUS AI - Training 3-Class Artery/Vein U-Net on RITE")
     print(f"    Train manifest: {train_manifest} | Epochs: {epochs} | Batch size: {batch_size} | LR: {lr}")
+    print(f"    Early stopping patience: {patience} epochs")
     print(f"    Plots output:   {plot_dir}")
     print("===================================================================\n")
 
-    aug = JointFundusAugmentation(p_flip_h=0.5, p_flip_v=0.5, p_rotate=0.5, max_angle=20.0)
+    aug = JointFundusAugmentation(
+        p_flip_h=0.5,
+        p_flip_v=0.5,
+        p_rotate=0.7,
+        max_angle=45.0,
+        p_scale=0.5,
+        p_jitter=0.6,
+        p_clahe=0.5
+    )
     full_dataset = RITEManifestDataset(manifest_path=train_manifest, image_size=image_size, transform=aug, limit=limit)
     test_dataset = RITEManifestDataset(manifest_path=test_manifest, image_size=image_size, limit=limit)
 
@@ -125,6 +135,8 @@ def train_artery_vein(
     out_path = Path(output_checkpoint)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     best_val_dice = 0.0
+    best_epoch = 0
+    patience_counter = 0
 
     history = {
         "loss": [],
@@ -166,10 +178,18 @@ def train_artery_vein(
 
         if val_res["mean_dice"] > best_val_dice:
             best_val_dice = val_res["mean_dice"]
+            best_epoch = epoch
+            patience_counter = 0
             torch.save(model.state_dict(), str(out_path))
             print(f"  [+] Saved new best model checkpoint to: {out_path} (Val Mean Dice: {best_val_dice:.4f})")
+        else:
+            patience_counter += 1
+            print(f"  [-] Val Mean Dice did not improve. Early stopping counter: {patience_counter}/{patience}")
+            if patience_counter >= patience:
+                print(f"\n[!] Early stopping triggered at epoch {epoch}. Best epoch was Epoch {best_epoch} with Val Mean Dice: {best_val_dice:.4f}")
+                break
 
-    print(f"\n[OK] RITE Training complete! Best Val Mean Dice: {best_val_dice:.4f}")
+    print(f"\n[OK] RITE Training complete! Best Val Mean Dice: {best_val_dice:.4f} (at Epoch {best_epoch})")
     print(f"     Checkpoint saved to: {out_path.resolve()}")
 
     # Reload best checkpoint for plotting and evaluation
@@ -214,6 +234,7 @@ def main():
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--image_size", type=int, default=512)
     parser.add_argument("--val_split", type=float, default=0.2)
+    parser.add_argument("--patience", type=int, default=6, help="Early stopping patience in epochs")
     parser.add_argument("--limit", type=int, default=None, help="Limit samples for dry run")
     parser.add_argument("--output_checkpoint", type=str, default="checkpoints/artery_vein/best_av_model.pth")
     parser.add_argument("--plot_dir", type=str, default="outputs/plots/artery_vein", help="Directory to save training curves and sample plots")
@@ -242,6 +263,7 @@ def main():
             lr=args.lr,
             image_size=args.image_size,
             val_split=args.val_split,
+            patience=args.patience,
             limit=args.limit,
             output_checkpoint=args.output_checkpoint,
             plot_dir=args.plot_dir

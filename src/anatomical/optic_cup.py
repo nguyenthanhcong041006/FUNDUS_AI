@@ -25,13 +25,8 @@ class OpticCupSegmenter:
                 p = cand
         if p.is_file():
             try:
-                import torch
-                from src.models.unet import UNet
-                net = UNet(in_channels=3, num_classes=2)
-                state = torch.load(str(p), map_location="cpu")
-                net.load_state_dict(state)
-                net.eval()
-                self.model = net
+                from src.models.unet import load_checkpoint_unet
+                self.model = load_checkpoint_unet(str(p), in_channels=3, num_classes=2, map_location="cpu")
             except Exception:
                 self.model = None
 

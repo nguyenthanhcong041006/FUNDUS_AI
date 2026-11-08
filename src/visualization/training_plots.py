@@ -209,8 +209,14 @@ def plot_sample_predictions(
 
             if task_type == "artery_vein":
                 # Multi-class: 0=BG, 1=Artery, 2=Vein
-                preds = torch.argmax(logits, dim=1).cpu().numpy() # (B, H, W)
-                targets_np = targets.cpu().numpy() # (B, H, W)
+                preds = torch.argmax(logits, dim=1).cpu().numpy()  # (B, H, W)
+                targets_np = targets.cpu().numpy()  # (B, H, W)
+            elif task_type == "lesions":
+                probs = torch.sigmoid(logits).cpu().numpy()
+                # Channels: 0:MA (0.65), 1:HE (0.70), 2:EX (0.50), 3:SE (0.50)
+                th = np.array([0.65, 0.70, 0.50, 0.50], dtype=np.float32).reshape(1, 4, 1, 1)
+                preds = (probs > th).astype(np.float32)
+                targets_np = targets.cpu().numpy()
             else:
                 probs = torch.sigmoid(logits).cpu().numpy()
                 preds = (probs > 0.5).astype(np.float32)

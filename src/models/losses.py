@@ -152,3 +152,36 @@ class MultiChannelFocalDiceLoss(nn.Module):
         return sum(channel_losses) / max(num_channels, 1)
 
 
+class CategoricalFocalLoss(nn.Module):
+    """Multi-class Categorical Focal Loss with Label Smoothing for imbalanced ordinal DR grading.
+
+    Combines Focal Loss (gamma=2.0) with Label Smoothing (0.1) to prevent overfitting
+    and loss divergence in late epochs on APTOS 2019 DR Severity classification.
+    """
+
+    def __init__(
+        self,
+        gamma: float = 2.0,
+        alpha: torch.Tensor | None = None,
+        label_smoothing: float = 0.1
+    ):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.label_smoothing = label_smoothing
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # Cross entropy loss with label smoothing per sample
+        ce = F.cross_entropy(logits, targets, label_smoothing=self.label_smoothing, reduction="none")
+        probs = F.softmax(logits, dim=-1)
+        p_t = probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+        focal_weight = (1.0 - p_t) ** self.gamma
+
+        if self.alpha is not None:
+            alpha_t = self.alpha.to(logits.device).gather(0, targets)
+            focal_weight = alpha_t * focal_weight
+
+        return (focal_weight * ce).mean()
+
+
+

@@ -34,8 +34,14 @@ from src.visualization.training_plots import (
 )
 
 
-def evaluate(model, data_loader, criterion, device, threshold: float = 0.5):
-    """Evaluates 4-channel lesion segmentation model computing both loss and mean dice."""
+def evaluate(
+    model,
+    data_loader,
+    criterion,
+    device,
+    thresholds: tuple[float, float, float, float] = (0.65, 0.70, 0.50, 0.50)
+):
+    """Evaluates 4-channel lesion segmentation model with per-channel probability thresholds."""
     model.eval()
     val_loss = 0.0
     channel_dices = [[] for _ in range(4)]
@@ -54,7 +60,8 @@ def evaluate(model, data_loader, criterion, device, threshold: float = 0.5):
 
             for i in range(images.size(0)):
                 for c in range(4):
-                    pred_c = (probs[i, c] > threshold).astype(np.uint8) * 255
+                    th = thresholds[c]
+                    pred_c = (probs[i, c] > th).astype(np.uint8) * 255
                     gt_c = (gts[i, c] > 0).astype(np.uint8) * 255
                     m = calculate_segmentation_metrics(pred_c, gt_c)
                     channel_dices[c].append(m["dice"])

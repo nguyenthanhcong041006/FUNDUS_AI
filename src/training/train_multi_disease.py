@@ -19,6 +19,7 @@ from sklearn.metrics import f1_score
 from src.datasets.odir_dataset import ODIRDataset, ODIR_DISEASE_COLUMNS
 from src.datasets.transforms import ClassificationFundusAugmentation
 from src.models.densenet import FundusMultiLabelDenseNet
+from src.training.resume_utils import load_training_state, save_training_state
 from src.visualization.training_plots import (
     plot_classification_training_results,
     save_history_csv
@@ -72,7 +73,8 @@ def train_multi_disease(
     use_augmentation: bool = True,
     limit: int | None = None,
     output_checkpoint: str = "checkpoints/classification/best_odir_classifier.pth",
-    plot_dir: str = "outputs/plots/multi_disease"
+    plot_dir: str = "outputs/plots/multi_disease",
+    resume: bool = False
 ):
     print("===================================================================")
     print("[*] FUNDUS AI - Training DenseNet-121 Multi-Disease on ODIR-5K")
@@ -110,7 +112,15 @@ def train_multi_disease(
         "f1": []
     }
 
-    for epoch in range(1, epochs + 1):
+    start_epoch = 1
+    if resume:
+        start_epoch, saved = load_training_state(out_path, model, optimizer, scheduler, device, epochs)
+        best_f1 = saved.get("best_f1", best_f1)
+        best_epoch = saved.get("best_epoch", best_epoch)
+        patience_counter = saved.get("patience_counter", patience_counter)
+        history = saved.get("history", history)
+
+    for epoch in range(start_epoch, epochs + 1):
         model.train()
         train_loss = 0.0
 
@@ -151,7 +161,12 @@ def train_multi_disease(
             print(f"  [-] Macro F1 did not improve. Early stopping counter: {patience_counter}/{patience}")
             if patience_counter >= patience:
                 print(f"\n[!] Early stopping triggered at epoch {epoch}. Best epoch was Epoch {best_epoch} with Macro F1: {best_f1:.4f}")
+                save_training_state(out_path, epoch, model, optimizer, scheduler, finished=True,
+                                    best_f1=best_f1, best_epoch=best_epoch, patience_counter=patience_counter, history=history)
                 break
+
+        save_training_state(out_path, epoch, model, optimizer, scheduler,
+                            best_f1=best_f1, best_epoch=best_epoch, patience_counter=patience_counter, history=history)
 
     print(f"\n[OK] ODIR-5K Multi-Disease Training complete! Best Macro F1: {best_f1:.4f} (at Epoch {best_epoch})")
     print(f"     Checkpoint saved to: {out_path.resolve()}")
@@ -189,6 +204,7 @@ def main():
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--output_checkpoint", type=str, default="checkpoints/classification/best_odir_classifier.pth")
     parser.add_argument("--plot_dir", type=str, default="outputs/plots/multi_disease")
+    parser.add_argument("--resume", action="store_true", help="Continue from <checkpoint>_last.pth saved after the last finished epoch")
     args = parser.parse_args()
 
     train_multi_disease(
@@ -202,7 +218,8 @@ def main():
         use_augmentation=not args.no_aug,
         limit=args.limit,
         output_checkpoint=args.output_checkpoint,
-        plot_dir=args.plot_dir
+        plot_dir=args.plot_dir,
+        resume=args.resume
     )
 
 

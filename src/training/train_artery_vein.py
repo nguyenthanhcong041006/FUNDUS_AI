@@ -27,6 +27,7 @@ from src.datasets.transforms import JointFundusAugmentation
 from src.models.unet import UNet
 from src.models.losses import MultiClassDiceCrossEntropyLoss
 from src.evaluation.segmentation_metrics import calculate_segmentation_metrics
+from src.training.resume_utils import load_training_state, save_training_state
 from src.visualization.training_plots import (
     plot_segmentation_training_results,
     plot_sample_predictions,
@@ -91,7 +92,8 @@ def train_artery_vein(
     patience: int = 6,
     limit: int | None = None,
     output_checkpoint: str = "checkpoints/artery_vein/best_av_model.pth",
-    plot_dir: str = "outputs/plots/artery_vein"
+    plot_dir: str = "outputs/plots/artery_vein",
+    resume: bool = False
 ):
     print("===================================================================")
     print("[*] FUNDUS AI - Training 3-Class Artery/Vein U-Net on RITE")
@@ -146,7 +148,15 @@ def train_artery_vein(
         "cup_dice": []   # Used by plotter to display Vein Dice
     }
 
-    for epoch in range(1, epochs + 1):
+    start_epoch = 1
+    if resume:
+        start_epoch, saved = load_training_state(out_path, model, optimizer, scheduler, device, epochs)
+        best_val_dice = saved.get("best_val_dice", best_val_dice)
+        best_epoch = saved.get("best_epoch", best_epoch)
+        patience_counter = saved.get("patience_counter", patience_counter)
+        history = saved.get("history", history)
+
+    for epoch in range(start_epoch, epochs + 1):
         model.train()
         train_loss = 0.0
 
@@ -187,7 +197,12 @@ def train_artery_vein(
             print(f"  [-] Val Mean Dice did not improve. Early stopping counter: {patience_counter}/{patience}")
             if patience_counter >= patience:
                 print(f"\n[!] Early stopping triggered at epoch {epoch}. Best epoch was Epoch {best_epoch} with Val Mean Dice: {best_val_dice:.4f}")
+                save_training_state(out_path, epoch, model, optimizer, scheduler, finished=True,
+                                    best_val_dice=best_val_dice, best_epoch=best_epoch, patience_counter=patience_counter, history=history)
                 break
+
+        save_training_state(out_path, epoch, model, optimizer, scheduler,
+                            best_val_dice=best_val_dice, best_epoch=best_epoch, patience_counter=patience_counter, history=history)
 
     print(f"\n[OK] RITE Training complete! Best Val Mean Dice: {best_val_dice:.4f} (at Epoch {best_epoch})")
     print(f"     Checkpoint saved to: {out_path.resolve()}")
@@ -238,6 +253,7 @@ def main():
     parser.add_argument("--limit", type=int, default=None, help="Limit samples for dry run")
     parser.add_argument("--output_checkpoint", type=str, default="checkpoints/artery_vein/best_av_model.pth")
     parser.add_argument("--plot_dir", type=str, default="outputs/plots/artery_vein", help="Directory to save training curves and sample plots")
+    parser.add_argument("--resume", action="store_true", help="Continue from <checkpoint>_last.pth saved after the last finished epoch")
     parser.add_argument("--eval_only", action="store_true", help="Only evaluate existing checkpoint")
 
     args = parser.parse_args()
@@ -266,7 +282,8 @@ def main():
             patience=args.patience,
             limit=args.limit,
             output_checkpoint=args.output_checkpoint,
-            plot_dir=args.plot_dir
+            plot_dir=args.plot_dir,
+            resume=args.resume
         )
 
 

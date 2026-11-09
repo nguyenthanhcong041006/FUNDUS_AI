@@ -32,6 +32,7 @@ from src.datasets.transforms import JointFundusAugmentation
 from src.models.attention_unet import AttentionUNet
 from src.models.losses import MultiChannelFocalDiceLoss
 from src.evaluation.segmentation_metrics import calculate_segmentation_metrics
+from src.training.resume_utils import load_training_state, save_training_state
 from src.visualization.training_plots import (
     plot_segmentation_training_results,
     plot_sample_predictions,
@@ -172,7 +173,8 @@ def train_lesions(
     thresholds: tuple[float, float, float, float] = (0.60, 0.65, 0.55, 0.55),
     limit: int | None = None,
     output_checkpoint: str = "checkpoints/lesions/best_lesion_model.pth",
-    plot_dir: str = "outputs/plots/lesions"
+    plot_dir: str = "outputs/plots/lesions",
+    resume: bool = False
 ):
     print("===================================================================")
     print("[*] FUNDUS AI - Training Attention U-Net on IDRiD Retinal Lesions")
@@ -226,7 +228,15 @@ def train_lesions(
         "mean_dice": []
     }
 
-    for epoch in range(1, epochs + 1):
+    start_epoch = 1
+    if resume:
+        start_epoch, saved = load_training_state(out_path, model, optimizer, scheduler, device, epochs)
+        best_val_dice = saved.get("best_val_dice", best_val_dice)
+        best_epoch = saved.get("best_epoch", best_epoch)
+        patience_counter = saved.get("patience_counter", patience_counter)
+        history = saved.get("history", history)
+
+    for epoch in range(start_epoch, epochs + 1):
         model.train()
         train_loss = 0.0
 
@@ -272,7 +282,12 @@ def train_lesions(
             print(f"  [-] Val Mean Dice did not improve. Early stopping counter: {patience_counter}/{patience}")
             if patience_counter >= patience:
                 print(f"\n[!] Early stopping triggered at epoch {epoch}. Best epoch was Epoch {best_epoch} with Val Mean Dice: {best_val_dice:.4f}")
+                save_training_state(out_path, epoch, model, optimizer, scheduler, finished=True,
+                                    best_val_dice=best_val_dice, best_epoch=best_epoch, patience_counter=patience_counter, history=history)
                 break
+
+        save_training_state(out_path, epoch, model, optimizer, scheduler,
+                            best_val_dice=best_val_dice, best_epoch=best_epoch, patience_counter=patience_counter, history=history)
 
     print(f"\n[OK] IDRiD Lesion Training complete! Best Val Mean Dice: {best_val_dice:.4f} (at Epoch {best_epoch})")
     print(f"     Checkpoint saved to: {out_path.resolve()}")
@@ -331,6 +346,7 @@ def main():
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--output_checkpoint", type=str, default="checkpoints/lesions/best_lesion_model.pth")
     parser.add_argument("--plot_dir", type=str, default="outputs/plots/lesions")
+    parser.add_argument("--resume", action="store_true", help="Continue from <checkpoint>_last.pth saved after the last finished epoch")
     args = parser.parse_args()
 
     train_lesions(
@@ -348,7 +364,8 @@ def main():
         erode_kernel=args.erode_kernel,
         limit=args.limit,
         output_checkpoint=args.output_checkpoint,
-        plot_dir=args.plot_dir
+        plot_dir=args.plot_dir,
+        resume=args.resume
     )
 
 

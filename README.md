@@ -69,6 +69,9 @@ eyes/
 │   └── classification/           # best_dr_classifier.pth (M5: QWK 0.9176), best_odir_classifier.pth (M6: F1 0.5897)
 ├── outputs/                      # Báo cáo, bảng tổng hợp và hình ảnh xuất ra
 ├── tests/                        # 22 unit tests tự động kiểm thử toàn bộ hệ thống
+├── scripts/train_all.py          # Bộ điều phối train toàn bộ 6 module (kiểm tra, log từng epoch, resume)
+├── train.bat                     # Double-click để train toàn bộ (gọi scripts/train_all.py)
+├── runs/                         # Kết quả mỗi lần chạy train.bat (git-ignored)
 ├── main.py                       # CLI Runner chính chạy toàn bộ Pipeline End-to-End
 ├── conftest.py                   # Cấu hình đường dẫn gốc cho Pytest
 └── requirements.txt              # Danh sách thư viện Python
@@ -262,7 +265,50 @@ python src/datasets/build_manifests.py
 
 ### Giai đoạn 1: Huấn luyện & Đánh giá từng Module chuyên biệt (Training & Evaluation)
 
-Mỗi mô hình chịu trách nhiệm một tác vụ chuyên biệt theo thiết kế chuẩn của **FUNDUS_AI_Dataset_Training_Plan_2.md**:
+#### 1.0 Train toàn bộ 6 module bằng một lệnh (`train.bat`) — khuyến nghị
+
+Double-click `train.bat` hoặc chạy trong terminal ở thư mục gốc dự án. Script lần lượt:
+
+1. **Kiểm tra trước khi train (~10 giây):** package Python, GPU/CUDA, ổ đĩa, manifest và **từng file ảnh/mask** trong manifest. Bài nào thiếu dữ liệu được báo `CHUA TRAIN DUOC` kèm lý do và bị bỏ qua.
+2. **Batch size cố định** đã đo cho RTX 4060 Laptop 8 GB @ 512px: M1 batch 4, M2–M4 batch 2, M5 batch 12, M6 batch 8 (đổi bằng `--batch-size`).
+3. **Train lần lượt 6 module**, hiện thanh tiến trình trực tiếp và một dòng tóm tắt sau mỗi epoch (thời gian epoch, ETA, VRAM/% GPU/nhiệt độ, RAM).
+4. **Duyệt rồi mới chép:** kết quả train nằm trong `runs/<ngày_giờ>/`, **không tự ghi đè** `checkpoints/` và `outputs/plots/`. Xem `SUMMARY.md` xong mới duyệt bằng `--approve` (hoặc trả lời `y` ở câu hỏi cuối lần train); bản cũ được sao lưu vào `runs/<run>/approved_backup/<ngày_giờ>/`.
+
+```bat
+train.bat                            :: kiểm tra + train tất cả (hoặc TIẾP TỤC run đang dở)
+train.bat --check-only               :: chỉ kiểm tra thiết bị + dữ liệu, không train
+train.bat --tasks vessels,lesions    :: chỉ train vài bài (optic_disc_cup, vessels, artery_vein, lesions, dr_grading, multi_disease)
+train.bat --epochs 5                 :: ghi đè số epoch cho mọi bài (mặc định 25-50, có early stopping)
+train.bat --batch-size 4             :: ghi đè batch size cố định
+train.bat --smoke                    :: chạy thử 1 epoch / 8 ảnh mỗi bài trước khi train thật (~1 phút)
+train.bat --tasks lesions --epochs 35 --batch-size 2 --image-size 512      :: train mới 1 bài với cấu hình cụ thể
+train.bat --tasks lesions --extra "--lr 0.0001 --patience 8"               :: thêm tham số riêng của script train (ghi đè mặc định)
+train.bat --approve 20261109_093724 --tasks optic_disc_cup,lesions         :: DUYỆT: chép checkpoint + biểu đồ của run vào checkpoints/ và outputs/plots/
+train.bat --promote                  :: tự duyệt, chép ngay khi từng bài train xong (mặc định KHÔNG tự chép)
+train.bat --new                      :: train mới từ đầu, KHÔNG tiếp tục run đang dở
+train.bat --resume 20261107_143800   :: tiếp tục đúng một run cụ thể trong runs/
+```
+
+**Tạm dừng / tiếp tục (resume):** bấm `Ctrl+C` hoặc đóng cửa sổ bất kỳ lúc nào. Lần sau chạy lại `train.bat`, script **tự động tiếp tục run đang dở**: bài đã xong được bỏ qua, bài đang train chạy tiếp từ epoch đã xong gần nhất (chỉ mất phần epoch đang chạy dở). Cơ chế:
+* Sau mỗi epoch, script train lưu `<checkpoint>_last.pth` (model, optimizer, scheduler, RNG, epoch, best metric, bộ đếm early stopping, history) — ghi an toàn (file tạm + đổi tên) nên mất điện giữa chừng cũng không hỏng. File này tự xoá khi bài train xong.
+* `runs/<ngày_giờ>/run_state.json` ghi trạng thái từng bài (`DONE`, `RUNNING`, `INTERRUPTED`, `FAILED`, ...).
+* Nếu đang có một tiến trình train khác chạy, `train.bat` từ chối chạy để tránh tranh GPU và ghi đè log.
+* Có thể resume khi chạy tay từng script: thêm `--resume` với cùng `--output_checkpoint`, ví dụ `python -m src.training.train_dr_grading --epochs 30 --resume`.
+
+**Kết quả mỗi lần chạy** nằm trong `runs/<ngày_giờ>/` (không ghi đè lần trước):
+
+| File | Nội dung |
+|---|---|
+| `train_log.txt` | Toàn bộ log của bộ điều phối (kiểm tra, batch, tóm tắt từng epoch) |
+| `SUMMARY.md` | Bảng kết quả cuối: trạng thái, batch, số epoch, thời gian, checkpoint tốt nhất |
+| `logs/<bài>.epochs.csv` / `.jsonl` | Mỗi epoch một dòng: thời điểm, thời gian epoch, thời gian đã chạy, ETA, thiết bị, batch, cỡ ảnh, VRAM/% GPU/nhiệt độ/công suất, RAM và toàn bộ metric |
+| `logs/<bài>.console.log` | Toàn bộ output của script train, có thời gian từng dòng |
+| `device_info.json`, `preflight.json`, `batch_sizes.json`, `run_state.json` | Thông tin thiết bị, kết quả kiểm tra, batch size, trạng thái resume |
+| `checkpoints/`, `plots/` | Checkpoint và biểu đồ của run này |
+
+> `train.bat` dùng Python global `C:\Program Files\Python310\python.exe` (nếu có), hoặc đặt biến môi trường `FUNDUS_PYTHON` trỏ tới `python.exe` khác.
+
+Các mục 1.1–1.6 bên dưới là lệnh train / đánh giá **từng module riêng lẻ**. Mỗi mô hình chịu trách nhiệm một tác vụ chuyên biệt theo thiết kế chuẩn của **FUNDUS_AI_Dataset_Training_Plan_2.md**:
 
 #### 1.1 Phân đoạn Mạch máu võng mạc (Module M2 — U-Net trên DRIVE)
 * **Nguyên tắc:** Huấn luyện và đánh giá trên bộ dữ liệu **DRIVE** chuẩn.

@@ -3,17 +3,18 @@ REM ============================================================================
 REM  FUNDUS AI - Train toan bo cac bai toan
 REM
 REM  Cach dung (double-click hoac chay trong terminal):
-REM    train.bat                              kiem tra + train tat ca (batch co dinh)
-REM    train.bat --check-only                 chi kiem tra thiet bi + du lieu, khong train
-REM    train.bat --tasks vessels,lesions      chi train mot so bai toan
+REM    train.bat                              mo bang dieu khien interactive (chon module, resume, kiem tra)
+REM    train.bat --status                     xem lich su va tien do cac run (train toi dau)
+REM    train.bat --tasks vessels,lesions      chi train mot so bai toan (co the chon patch_lesions SOTA)
+REM    train.bat --tasks patch_lesions        train module M4-SOTA Patch-Based IDRiD (2048px)
 REM    train.bat --epochs 5                   ghi de so epoch cho moi bai toan
 REM    train.bat --batch-size 4               ghi de batch co dinh (mac dinh da toi uu cho RTX 4060 8GB)
+REM    train.bat --check-only                 chi kiem tra thiet bi + du lieu, khong train
 REM    train.bat --smoke                      chay thu 1 epoch/8 anh moi bai truoc khi train (~1 phut)
-REM    train.bat --extra "--lr 0.0001 --patience 8"   them tham so rieng cho script train cua cac bai da chon
-REM    train.bat --approve 20261109_093724 --tasks lesions   DUYET: chep checkpoint + bieu do cua run vao
-REM                                           checkpoints\ va outputs\plots\ (ban cu sao luu trong runs\<run>\approved_backup\)
-REM    train.bat --promote                    tu duyet: chep ngay khi tung bai train xong (mac dinh KHONG tu chep)
-REM    train.bat --new                       train moi tu dau, KHONG tiep tuc run dang do
+REM    train.bat --extra "--lr 0.0001"        them tham so rieng cho script train cua cac bai da chon
+REM    train.bat --approve 20261109_093724 --tasks lesions   DUYET: chep checkpoint + bieu do vao checkpoints\
+REM    train.bat --promote                    tu duyet: chep ngay khi tung bai train xong
+REM    train.bat --new                        train moi tu dau, KHONG tiep tuc run dang do
 REM    train.bat --resume 20261107_143800     tiep tuc dung run nay (mac dinh: tu lay run dang do moi nhat)
 REM
 REM  TAM DUNG / TIEP TUC: bam Ctrl+C hoac dong cua so bat ky luc nao. Lan sau chay lai train.bat
@@ -35,6 +36,8 @@ set "PYTHONUNBUFFERED=1"
 
 if defined FUNDUS_PYTHON (
     set "PY=%FUNDUS_PYTHON%"
+) else if exist ".venv\Scripts\python.exe" (
+    set "PY=.venv\Scripts\python.exe"
 ) else if exist "C:\Program Files\Python310\python.exe" (
     set "PY=C:\Program Files\Python310\python.exe"
 ) else (

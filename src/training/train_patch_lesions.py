@@ -30,7 +30,12 @@ from src.datasets.utils import resolve_path
 from src.datasets.patch_idrid_dataset import PatchIDRiDLesionDataset
 from src.models.attention_unet import AttentionUNet
 from src.models.losses import MultiChannelFocalDiceLoss, MultiChannelFocalTverskyLoss
-from src.evaluation.sliding_window import evaluate_patch_model_full_images, sliding_window_inference
+from src.evaluation.sliding_window import (
+    evaluate_patch_model_full_images,
+    sliding_window_inference,
+    preload_validation_records
+)
+from src.training.resume_utils import load_training_state, save_training_state
 from src.visualization.training_plots import (
     plot_segmentation_training_results,
     save_history_csv
@@ -65,20 +70,25 @@ def train_patch_lesions(
     batch_size: int = 4,
     lr: float = 2e-4,
     base_size: int = 2048,
+    image_size: int | None = None,
     patch_size: int = 512,
-    patches_per_image: int = 16,
+    patches_per_image: int = 8,
     val_split: float = 0.2,
     patience: int = 12,
     loss_type: str = "focal_dice",
     focal_weight: float = 0.25,
     dice_weight: float = 0.75,
     pos_weight: float = 4.0,
-    stride: int = 256,
+    stride: int = 512,
     eval_batch_size: int = 8,
     limit: int | None = None,
     output_checkpoint: str = "checkpoints/lesions/best_patch_lesion_model.pth",
-    plot_dir: str = "outputs/plots/patch_lesions"
+    plot_dir: str = "outputs/plots/patch_lesions",
+    resume: bool = False
 ):
+    if image_size is not None and image_size > 512:
+        base_size = image_size
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\n========================================================")
     print(f"[*] Starting SOTA Phase 3 Patch-Based IDRiD Lesion Training")
@@ -86,6 +96,7 @@ def train_patch_lesions(
     print(f"    Base Scale: {base_size}x{base_size} | Patch: {patch_size}x{patch_size} (Stride: {stride})")
     print(f"    Patches per Image: {patches_per_image} | Batch Size: {batch_size}")
     print(f"    Loss: {loss_type} (Focal: {focal_weight}, Dice: {dice_weight}, PosWeight: {pos_weight})")
+    print(f"    Resume mode: {resume}")
     print(f"========================================================\n")
 
     # Split train and validation manifests strictly by image ID
@@ -105,6 +116,7 @@ def train_patch_lesions(
     val_records = val_df.to_dict(orient="records")
 
     print(f"[*] Dataset Split: {len(train_df)} Training Images | {len(val_df)} Validation Images")
+    cached_val_records = preload_validation_records(val_records, base_size=base_size, equalize_illumination=True)
 
     # Temporary train manifest for patch dataset loader
     tmp_train_csv = PROJECT_ROOT / "manifests" / "dr_lesions" / "_tmp_patch_train.csv"
@@ -163,7 +175,15 @@ def train_patch_lesions(
     out_dir = resolve_path(plot_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for epoch in range(1, epochs + 1):
+    start_epoch = 1
+    if resume:
+        start_epoch, saved = load_training_state(out_path, model, optimizer, scheduler, device, epochs)
+        best_val_dice = saved.get("best_val_dice", best_val_dice)
+        best_epoch = saved.get("best_epoch", best_epoch)
+        patience_counter = saved.get("patience_counter", patience_counter)
+        history = saved.get("history", history)
+
+    for epoch in range(start_epoch, epochs + 1):
         model.train()
         train_loss = 0.0
 
@@ -185,10 +205,10 @@ def train_patch_lesions(
         scheduler.step()
         avg_loss = train_loss / max(len(train_loader), 1)
 
-        # Full-image Sliding Window Validation
+        # Full-image Sliding Window Validation (RAM-cached for zero I/O latency)
         val_res = evaluate_patch_model_full_images(
             model=model,
-            records=val_records,
+            records=cached_val_records,
             device=device,
             thresholds=thresholds,
             base_size=base_size,
@@ -199,7 +219,7 @@ def train_patch_lesions(
         )
 
         current_val_dice = val_res["mean_dice"]
-        print(f"Epoch [{epoch:02d}/{epochs:02d}] - Train Loss: {avg_loss:.4f} | Val Mean Dice (Full-View): {current_val_dice:.4f} (MA: {val_res['ma_dice']:.4f}, HE: {val_res['he_dice']:.4f}, EX: {val_res['ex_dice']:.4f}, SE: {val_res['se_dice']:.4f})")
+        print(f"Epoch [{epoch:02d}/{epochs:02d}] - Train Loss: {avg_loss:.4f} | Val Mean Dice: {current_val_dice:.4f} (MA: {val_res['ma_dice']:.4f}, HE: {val_res['he_dice']:.4f}, EX: {val_res['ex_dice']:.4f}, SE: {val_res['se_dice']:.4f})")
 
         history["loss"].append(round(avg_loss, 4))
         history["val_loss"].append(round(1.0 - current_val_dice, 4))
@@ -216,7 +236,12 @@ def train_patch_lesions(
             print(f"  [-] Val Mean Dice did not improve. Early stopping counter: {patience_counter}/{patience}")
             if patience_counter >= patience:
                 print(f"\n[!] Early stopping triggered at epoch {epoch}. Best epoch was Epoch {best_epoch} with Val Mean Dice: {best_val_dice:.4f}")
+                save_training_state(out_path, epoch, model, optimizer, scheduler, finished=True,
+                                    best_val_dice=best_val_dice, best_epoch=best_epoch, patience_counter=patience_counter, history=history)
                 break
+
+        save_training_state(out_path, epoch, model, optimizer, scheduler,
+                            best_val_dice=best_val_dice, best_epoch=best_epoch, patience_counter=patience_counter, history=history)
 
     print(f"\n[OK] SOTA Patch Training complete! Best Val Mean Dice: {best_val_dice:.4f} (at Epoch {best_epoch})")
     print(f"     Checkpoint saved to: {out_path.resolve()}")
@@ -245,19 +270,21 @@ def main():
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--base_size", type=int, default=2048)
+    parser.add_argument("--image_size", type=int, default=None, help="Base image size (override for base_size)")
     parser.add_argument("--patch_size", type=int, default=512)
-    parser.add_argument("--patches_per_image", type=int, default=16)
+    parser.add_argument("--patches_per_image", type=int, default=8)
     parser.add_argument("--val_split", type=float, default=0.2)
     parser.add_argument("--patience", type=int, default=12)
     parser.add_argument("--loss_type", type=str, default="focal_dice", choices=["focal_dice", "focal_tversky"])
     parser.add_argument("--focal_weight", type=float, default=0.25)
     parser.add_argument("--dice_weight", type=float, default=0.75)
     parser.add_argument("--pos_weight", type=float, default=4.0)
-    parser.add_argument("--stride", type=int, default=256)
+    parser.add_argument("--stride", type=int, default=512)
     parser.add_argument("--eval_batch_size", type=int, default=8)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--output_checkpoint", type=str, default="checkpoints/lesions/best_patch_lesion_model.pth")
     parser.add_argument("--plot_dir", type=str, default="outputs/plots/patch_lesions")
+    parser.add_argument("--resume", action="store_true", help="Continue from <checkpoint>_last.pth saved after the last finished epoch")
     args = parser.parse_args()
 
     train_patch_lesions(
@@ -268,6 +295,7 @@ def main():
         batch_size=args.batch_size,
         lr=args.lr,
         base_size=args.base_size,
+        image_size=args.image_size,
         patch_size=args.patch_size,
         patches_per_image=args.patches_per_image,
         val_split=args.val_split,
@@ -280,7 +308,8 @@ def main():
         eval_batch_size=args.eval_batch_size,
         limit=args.limit,
         output_checkpoint=args.output_checkpoint,
-        plot_dir=args.plot_dir
+        plot_dir=args.plot_dir,
+        resume=args.resume
     )
 
 

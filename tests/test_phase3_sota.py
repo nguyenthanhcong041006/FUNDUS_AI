@@ -7,8 +7,9 @@ import torch.nn as nn
 
 from src.preprocessing.enhancement import ben_graham_equalize
 from src.models.losses import MultiChannelFocalTverskyLoss
-from src.evaluation.sliding_window import create_gaussian_weight_window, sliding_window_inference
+from src.evaluation.sliding_window import create_gaussian_weight_window, sliding_window_inference, preload_validation_records
 from src.datasets.patch_idrid_dataset import PatchIDRiDLesionDataset
+from src.training.resume_utils import save_training_state, load_training_state, state_path_for
 
 
 def test_ben_graham_equalize_synthetic():
@@ -80,3 +81,40 @@ def test_patch_idrid_dataset_sampling():
     assert sample["mask"].shape == (4, 128, 128)
     assert sample["image"].dtype == torch.float32
     assert sample["mask"].dtype == torch.float32
+
+
+def test_preload_validation_records():
+    manifest = "manifests/dr_lesions/idrid_lesions_train.csv"
+    import pandas as pd
+    from src.datasets.utils import resolve_path
+    df = pd.read_csv(resolve_path(manifest)).iloc[:1]
+    records = df.to_dict(orient="records")
+    cached = preload_validation_records(records, base_size=256, equalize_illumination=False)
+    assert len(cached) == 1
+    assert "img_tensor" in cached[0]
+    assert "fov_mask" in cached[0]
+    assert "gts" in cached[0]
+    assert cached[0]["img_tensor"].shape == (1, 3, 256, 256)
+    assert len(cached[0]["gts"]) == 4
+
+
+def test_resume_utils_roundtrip(tmp_path):
+    ckpt = tmp_path / "model.pth"
+    model = nn.Linear(4, 2)
+    opt = torch.optim.Adam(model.parameters(), lr=0.01)
+    sched = torch.optim.lr_scheduler.StepLR(opt, step_size=5)
+
+    save_training_state(ckpt, epoch=7, model=model, optimizer=opt, scheduler=sched, best_val_dice=0.88, patience_counter=2)
+    last_file = state_path_for(ckpt)
+    assert last_file.exists()
+
+    new_model = nn.Linear(4, 2)
+    new_opt = torch.optim.Adam(new_model.parameters(), lr=0.01)
+    new_sched = torch.optim.lr_scheduler.StepLR(new_opt, step_size=5)
+
+    start_ep, loop_vars = load_training_state(ckpt, new_model, new_opt, new_sched, "cpu", epochs=20)
+    assert start_ep == 8
+    assert loop_vars["best_val_dice"] == 0.88
+    assert loop_vars["patience_counter"] == 2
+    for p1, p2 in zip(model.parameters(), new_model.parameters()):
+        assert torch.allclose(p1, p2)

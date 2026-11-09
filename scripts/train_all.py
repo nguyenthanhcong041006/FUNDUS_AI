@@ -78,6 +78,13 @@ TASKS = [
          train_manifest="manifests/dr_lesions/idrid_lesions_train.csv", train_factor=0.8,
          model="attunet:4", epochs=35, bs=2, peak_gb=4.84,
          checkpoint="checkpoints/lesions/best_lesion_model.pth"),
+    dict(key="patch_lesions", name="M4-SOTA Patch Lesions (IDRiD 2048px)",
+         module="src.training.train_patch_lesions", extra=["--stride", "512", "--patches_per_image", "8"],
+         manifests=["manifests/dr_lesions/idrid_lesions_train.csv", "manifests/dr_lesions/idrid_lesions_test.csv"],
+         train_manifest="manifests/dr_lesions/idrid_lesions_train.csv", train_factor=0.8,
+         model="attunet:4", epochs=35, bs=4, peak_gb=5.5,
+         checkpoint="checkpoints/lesions/best_patch_lesion_model.pth",
+         optional=True),
     dict(key="dr_grading", name="M5 DR Grading (APTOS)",
          module="src.training.train_dr_grading", extra=[],
          manifests=["manifests/dr_grading/aptos_train.csv"],
@@ -827,6 +834,161 @@ def write_summary(run_dir, dev, report, chosen, results, tasks, started, log):
 
 
 # ---------------------------------------------------------------------------------------------
+# Status & Interactive Menu
+# ---------------------------------------------------------------------------------------------
+def show_training_status():
+    runs_root = ROOT / "runs"
+    if not runs_root.is_dir():
+        print("\n[i] Chua co thu muc runs/ (chua co lan train nao chay qua train.bat).")
+        return 0
+    all_runs = sorted((p for p in runs_root.glob("2*") if p.is_dir()), reverse=True)
+    if not all_runs:
+        print("\n[i] Chua co lan train nao trong runs/.")
+        return 0
+    print("\n" + "=" * 80)
+    print(" FUNDUS AI - LICH SU & TRANG THAI HUAN LUYEN (TRAIN STATUS)")
+    print("=" * 80)
+    for rd in all_runs[:10]:
+        st = load_run_state(rd)
+        if not st:
+            print(f"\n[Run {rd.name}] (chua co state hoac check-only)")
+            continue
+        cfg = st.get("config", {})
+        started = st.get("started", "?")
+        sessions = st.get("sessions", [])
+        last_end = sessions[-1].get("end") if sessions else None
+        print(f"\n[Run {rd.name}]  Bat dau: {started}" + (f" | Gan nhat: {last_end}" if last_end else ""))
+        print(f"  Cau hinh: {len(cfg.get('tasks', []))} tasks | img: {cfg.get('image_size', 512)}px")
+        for k, v in st.get("tasks", {}).items():
+            t = TASK_BY_KEY.get(k, {})
+            t_name = t.get("name", k)
+            status = v.get("status", "UNKNOWN")
+            r = v.get("result", {})
+            done_ep = r.get("epochs_done", "?")
+            plan_ep = r.get("epochs_planned", cfg.get("epochs", {}).get(k, "?"))
+            dur = r.get("duration", "")
+            best = r.get("best", "")
+
+            ckpt = rd / "checkpoints" / Path(t.get("checkpoint", f"{k}.pth")).name
+            last_ckpt = state_path_for(ckpt)
+
+            res_info = ""
+            if last_ckpt.exists():
+                res_info = f" -> CO STATE RESUME ({last_ckpt.name})"
+
+            print(f"    * {t_name:<34} : {status:<12} (ep {done_ep}/{plan_ep}) {dur}{res_info}")
+            if best:
+                print(f"      Best: {best[:70]}")
+    print("=" * 80 + "\n")
+    return 0
+
+
+def interactive_menu(args):
+    """Interactive CLI menu when train.bat is run with no arguments."""
+    resumable_dir, resumable_st = find_resumable_run()
+
+    print("\n" + "=" * 78)
+    print("           FUNDUS AI - BANG DIEU KHIEN HUAN LUYEN (TRAIN MANAGER)")
+    print("=" * 78)
+
+    if resumable_st:
+        cfg = resumable_st.get("config", {})
+        print(f"\n  [!] PHAT HIEN RUN DANG DO CO THE TIEP TUC: runs/{resumable_dir.name}")
+        print(f"      Bat dau luc: {resumable_st.get('started', '?')}")
+        for k, v in resumable_st.get("tasks", {}).items():
+            t_name = TASK_BY_KEY.get(k, {}).get("name", k)
+            st_text = v.get("status", "UNKNOWN")
+            r = v.get("result", {})
+            ep_info = f"ep {r.get('epochs_done', 0)}/{cfg.get('epochs', {}).get(k, '?')}" if "epochs_done" in r else ""
+            print(f"        * {t_name:<34} : {st_text:<12} {ep_info}")
+        print(f"      => Ban co the tiep tuc ngay tu diem da dung (Ctrl+C) ma khong mat du lieu.")
+
+    print("\n  LUA CHON HANH DONG:")
+    if resumable_st:
+        print("    [1] (Enter) Tiep tuc (RESUME) run dang do tren")
+    else:
+        print("    [1] Train TAT CA 6 bai toan co ban (M1 -> M6)")
+    print("    [2] Chon module cu the de train (M1, M2, M3, M4, M4-SOTA, M5, M6)")
+    print("    [3] Train moi tat ca tu dau (--new)")
+    print("    [4] Kiem tra du lieu va thiet bi truoc (--check-only)")
+    print("    [5] Chay thu 1 epoch/8 anh moi bai (--smoke)")
+    print("    [6] Xem lich su & tien do cac run (train toi dau)")
+    print("    [0] Thoat")
+
+    prompt = "\n  Nhap lua chon [1]: " if resumable_st else "\n  Nhap lua chon [1-6, 0]: "
+    try:
+        choice = input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n[i] Da huy.")
+        sys.exit(0)
+
+    if choice == "" or choice == "1":
+        if resumable_st:
+            args.resume = resumable_dir.name
+        else:
+            args.tasks = "all"
+    elif choice == "2":
+        print("\n  DANH SACH MODULE CO THE TRAIN:")
+        for idx, t in enumerate(TASKS, 1):
+            opt = " [SOTA Phase 3]" if t.get("optional") else ""
+            print(f"    [{idx}] {t['key']:<15} : {t['name']}{opt} ({t['epochs']} ep, batch {t['bs']})")
+        print("    [A] Tat ca cac module tren")
+
+        try:
+            sel_input = input("\n  Nhap so thu tu module (vd: 5 hoac 2,4,5): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n[i] Da huy.")
+            sys.exit(0)
+
+        if sel_input.lower() == "a":
+            args.tasks = "all"
+        else:
+            chosen_keys = []
+            for part in sel_input.replace(",", " ").split():
+                if part.isdigit():
+                    num = int(part)
+                    if 1 <= num <= len(TASKS):
+                        chosen_keys.append(TASKS[num - 1]["key"])
+                elif part in TASK_BY_KEY:
+                    chosen_keys.append(part)
+            if not chosen_keys:
+                print("[!] Lua chon khong hop le.")
+                sys.exit(1)
+            args.tasks = ",".join(chosen_keys)
+
+        try:
+            ep_input = input("  So epoch muon train (Enter de giu mac dinh): ").strip()
+            if ep_input.isdigit() and int(ep_input) > 0:
+                args.epochs = int(ep_input)
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+        try:
+            bs_input = input("  Batch size (Enter de giu mac dinh toi uu cho 8GB VRAM): ").strip()
+            if bs_input.isdigit() and int(bs_input) > 0:
+                args.batch_size = int(bs_input)
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+    elif choice == "3":
+        args.new = True
+        args.tasks = "all"
+    elif choice == "4":
+        args.check_only = True
+    elif choice == "5":
+        args.smoke = True
+    elif choice == "6":
+        show_training_status()
+        sys.exit(0)
+    elif choice == "0":
+        print("[i] Thoat.")
+        sys.exit(0)
+    else:
+        print("[!] Lua chon khong hop le.")
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="FUNDUS AI - train all tasks")
     ap.add_argument("--tasks", default="all", help="vd: vessels,lesions (mac dinh: all). Khoa: " +
@@ -850,11 +1012,17 @@ def main():
     ap.add_argument("--new", action="store_true", help="bat dau run moi, KHONG tiep tuc run dang do")
     ap.add_argument("--resume", metavar="RUN", default=None,
                     help="tiep tuc dung run nay trong runs/ (mac dinh: tu dong lay run dang do moi nhat)")
+    ap.add_argument("--status", action="store_true", help="xem lich su va tien do cac run (train toi dau)")
+    ap.add_argument("--menu", action="store_true", help="hien thi bang dieu khien interactive de chon module")
     ap.add_argument("--_devinfo", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     if args._devinfo:
         return helper_devinfo()
+    if args.status:
+        return show_training_status()
+    if (len(sys.argv) == 1 or args.menu) and sys.stdin and sys.stdin.isatty():
+        interactive_menu(args)
     if args.new and args.resume:
         print("[!] Khong dung --new cung --resume.")
         return 2
@@ -907,8 +1075,9 @@ def main():
         log("=" * 78)
         todo = [t for t in tasks if rstate["tasks"][t["key"]]["status"] not in FINAL_STATUSES]
     else:
+        default_keys = [t["key"] for t in TASKS if not t.get("optional")]
         keys = [t["key"] for t in TASKS]
-        sel = keys if args.tasks == "all" else [k.strip() for k in args.tasks.split(",") if k.strip()]
+        sel = default_keys if args.tasks == "all" else [k.strip() for k in args.tasks.split(",") if k.strip()]
         unknown = [k for k in sel if k not in keys]
         if unknown:
             print(f"[!] Khong biet bai toan: {unknown}. Hop le: {keys}")

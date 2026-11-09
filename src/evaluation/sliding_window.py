@@ -98,6 +98,60 @@ def sliding_window_inference(
     return stitched_probs
 
 
+def preload_validation_records(
+    records: List[Dict[str, Any]],
+    base_size: int = 2048,
+    equalize_illumination: bool = True
+) -> List[Dict[str, Any]]:
+    """Pre-processes and caches validation images and masks in RAM to avoid redundant I/O."""
+    cached = []
+    for rec in tqdm(records, desc="[*] Pre-caching validation images in RAM", leave=False):
+        img_path = resolve_path(rec["image_path"])
+        if not img_path.is_file():
+            continue
+        img_orig = Image.open(img_path).convert("RGB")
+        img_np_orig = np.array(img_orig, dtype=np.uint8)
+        orig_h, orig_w = img_np_orig.shape[:2]
+
+        img_lb, pad_meta = letterbox_rgb(img_np_orig, target_size=base_size)
+        gray = cv2.cvtColor(img_lb, cv2.COLOR_RGB2GRAY)
+        fov_mask = (gray > 10).astype(np.uint8)
+
+        if equalize_illumination:
+            img_processed = ben_graham_equalize(img_lb, sigma=30.0, fov_mask=fov_mask)
+        else:
+            img_processed = img_lb
+
+        img_tensor = torch.from_numpy(img_processed.transpose(2, 0, 1)).float().unsqueeze(0) / 255.0
+
+        def _load_single_mask(mask_path):
+            if not mask_path or pd.isna(mask_path) or str(mask_path).strip() == "":
+                return np.zeros((orig_h, orig_w), dtype=np.uint8)
+            p = resolve_path(mask_path)
+            if not p.is_file():
+                return np.zeros((orig_h, orig_w), dtype=np.uint8)
+            m = Image.open(p).convert("L")
+            return (np.array(m, dtype=np.uint8) > 0).astype(np.uint8)
+
+        ma_raw = _load_single_mask(rec.get("ma_mask_path", ""))
+        he_raw = _load_single_mask(rec.get("he_mask_path", ""))
+        ex_raw = _load_single_mask(rec.get("ex_mask_path", ""))
+        se_raw = _load_single_mask(rec.get("se_mask_path", ""))
+
+        ma_lb = letterbox_mask(ma_raw, target_size=base_size, pad_meta=pad_meta)
+        he_lb = letterbox_mask(he_raw, target_size=base_size, pad_meta=pad_meta)
+        ex_lb = letterbox_mask(ex_raw, target_size=base_size, pad_meta=pad_meta)
+        se_lb = letterbox_mask(se_raw, target_size=base_size, pad_meta=pad_meta)
+
+        cached.append({
+            "img_tensor": img_tensor,
+            "fov_mask": fov_mask,
+            "gts": [ma_lb, he_lb, ex_lb, se_lb],
+            "image_id": rec.get("image_id", "")
+        })
+    return cached
+
+
 def evaluate_patch_model_full_images(
     model: nn.Module,
     records: List[Dict[str, Any]],
@@ -123,26 +177,45 @@ def evaluate_patch_model_full_images(
         return (np.array(m, dtype=np.uint8) > 0).astype(np.uint8)
 
     for rec in tqdm(records, desc="[Sliding Window Eval]", leave=False):
-        img_path = resolve_path(rec["image_path"])
-        if not img_path.is_file():
-            continue
-
-        img_orig = Image.open(img_path).convert("RGB")
-        img_np_orig = np.array(img_orig, dtype=np.uint8)
-        orig_h, orig_w = img_np_orig.shape[:2]
-
-        img_lb, pad_meta = letterbox_rgb(img_np_orig, target_size=base_size)
-        gray = cv2.cvtColor(img_lb, cv2.COLOR_RGB2GRAY)
-        fov_mask = (gray > 10).astype(np.uint8)
-
-        if equalize_illumination:
-            img_processed = ben_graham_equalize(img_lb, sigma=30.0, fov_mask=fov_mask)
+        if "img_tensor" in rec and "fov_mask" in rec and "gts" in rec:
+            img_tensor = rec["img_tensor"]
+            if img_tensor.device != device:
+                img_tensor = img_tensor.to(device)
+            fov_mask = rec["fov_mask"]
+            gts = rec["gts"]
         else:
-            img_processed = img_lb
+            img_path = resolve_path(rec["image_path"])
+            if not img_path.is_file():
+                continue
 
-        # Form tensor
-        img_tensor = torch.from_numpy(img_processed.transpose(2, 0, 1)).float().unsqueeze(0) / 255.0
-        img_tensor = img_tensor.to(device)
+            img_orig = Image.open(img_path).convert("RGB")
+            img_np_orig = np.array(img_orig, dtype=np.uint8)
+            orig_h, orig_w = img_np_orig.shape[:2]
+
+            img_lb, pad_meta = letterbox_rgb(img_np_orig, target_size=base_size)
+            gray = cv2.cvtColor(img_lb, cv2.COLOR_RGB2GRAY)
+            fov_mask = (gray > 10).astype(np.uint8)
+
+            if equalize_illumination:
+                img_processed = ben_graham_equalize(img_lb, sigma=30.0, fov_mask=fov_mask)
+            else:
+                img_processed = img_lb
+
+            # Form tensor
+            img_tensor = torch.from_numpy(img_processed.transpose(2, 0, 1)).float().unsqueeze(0) / 255.0
+            img_tensor = img_tensor.to(device)
+
+            # Ground truths
+            ma_raw = _load_single_mask(rec.get("ma_mask_path", ""), orig_h, orig_w)
+            he_raw = _load_single_mask(rec.get("he_mask_path", ""), orig_h, orig_w)
+            ex_raw = _load_single_mask(rec.get("ex_mask_path", ""), orig_h, orig_w)
+            se_raw = _load_single_mask(rec.get("se_mask_path", ""), orig_h, orig_w)
+
+            ma_lb = letterbox_mask(ma_raw, target_size=base_size, pad_meta=pad_meta)
+            he_lb = letterbox_mask(he_raw, target_size=base_size, pad_meta=pad_meta)
+            ex_lb = letterbox_mask(ex_raw, target_size=base_size, pad_meta=pad_meta)
+            se_lb = letterbox_mask(se_raw, target_size=base_size, pad_meta=pad_meta)
+            gts = [ma_lb, he_lb, ex_lb, se_lb]
 
         # Dense prediction
         probs = sliding_window_inference(

@@ -17,6 +17,7 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset
 import cv2
+from tqdm import tqdm
 
 from src.datasets.utils import resolve_path
 from src.preprocessing.normalization import letterbox_rgb, letterbox_mask
@@ -121,7 +122,7 @@ class PatchIDRiDLesionDataset(Dataset):
 
     def _preload_dataset(self):
         """Pre-loads all images and masks into RAM for zero-latency training."""
-        for rec in self.records:
+        for rec in tqdm(self.records, desc="[*] Preloading 2048px images into RAM", leave=False):
             sample_data = self._prepare_sample(rec)
             self.cache.append(sample_data)
 

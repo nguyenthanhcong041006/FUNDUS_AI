@@ -232,18 +232,7 @@ def evaluate_patch_model_full_images(
         for c in range(4):
             probs_np[c] = probs_np[c] * fov_mask
 
-        # Ground truths
-        ma_raw = _load_single_mask(rec.get("ma_mask_path", ""), orig_h, orig_w)
-        he_raw = _load_single_mask(rec.get("he_mask_path", ""), orig_h, orig_w)
-        ex_raw = _load_single_mask(rec.get("ex_mask_path", ""), orig_h, orig_w)
-        se_raw = _load_single_mask(rec.get("se_mask_path", ""), orig_h, orig_w)
-
-        ma_lb = letterbox_mask(ma_raw, target_size=base_size, pad_meta=pad_meta)
-        he_lb = letterbox_mask(he_raw, target_size=base_size, pad_meta=pad_meta)
-        ex_lb = letterbox_mask(ex_raw, target_size=base_size, pad_meta=pad_meta)
-        se_lb = letterbox_mask(se_raw, target_size=base_size, pad_meta=pad_meta)
-        gts = [ma_lb, he_lb, ex_lb, se_lb]
-
+        # `gts` (letterboxed ground truths) was already built above, either from the RAM cache or from disk.
         for c in range(4):
             th = thresholds[c]
             pred_c = (probs_np[c] > th).astype(np.uint8) * 255

@@ -11,6 +11,7 @@ from .losses import (
     MultiClassDiceCrossEntropyLoss,
     MultiChannelDiceBCELoss,
     MultiChannelFocalDiceLoss,
+    MultiChannelFocalTverskyLoss,
     CategoricalFocalLoss
 )
 
@@ -28,5 +29,6 @@ __all__ = [
     "MultiClassDiceCrossEntropyLoss",
     "MultiChannelDiceBCELoss",
     "MultiChannelFocalDiceLoss",
+    "MultiChannelFocalTverskyLoss",
     "CategoricalFocalLoss",
 ]

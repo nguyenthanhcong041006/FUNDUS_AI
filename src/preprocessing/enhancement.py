@@ -90,3 +90,35 @@ def enhance_fundus_image(
     enhancer = FundusEnhancer(clahe_clip_limit=clahe_clip_limit)
     return enhancer.process(image_bgr, fov_mask=fov_mask)
 
+
+def ben_graham_equalize(
+    image_rgb: np.ndarray,
+    sigma: float = 30.0,
+    fov_mask: Optional[np.ndarray] = None
+) -> np.ndarray:
+    """Applies Ben Graham's retinal illumination equalization.
+
+    Formula: I_norm = clip(4 * I - 4 * GaussianBlur(I, sigma) + 128, 0, 255)
+    Neutralizes illumination vignetting and peripheral shadows while boosting
+    high-frequency vascular and lesion contrast.
+
+    Args:
+        image_rgb: uint8 RGB image of shape (H, W, 3).
+        sigma: Standard deviation for Gaussian kernel. Default 30.0 for fundus images.
+        fov_mask: Optional binary mask (H, W) indicating retinal area.
+
+    Returns:
+        uint8 RGB image normalized by local background subtraction.
+    """
+    if fov_mask is None:
+        gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+        fov_mask = (gray > 10).astype(np.uint8)
+
+    blurred = cv2.GaussianBlur(image_rgb, (0, 0), sigma)
+    enhanced = cv2.addWeighted(image_rgb, 4.0, blurred, -4.0, 128)
+
+    # Preserve dark background outside the retinal field of view
+    enhanced[fov_mask == 0] = 0
+    return enhanced
+
+

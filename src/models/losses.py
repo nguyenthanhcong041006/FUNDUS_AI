@@ -155,6 +155,54 @@ class MultiChannelFocalDiceLoss(nn.Module):
         return sum(channel_losses) / max(num_channels, 1)
 
 
+class MultiChannelFocalTverskyLoss(nn.Module):
+    """Multi-Channel Focal Tversky Loss for extreme lesion class imbalance (MedIA / IEEE TMI).
+
+    Formula:
+        TI = (TP + smooth) / (TP + alpha * FN + beta * FP + smooth)
+        FTL = (1.0 - TI) ** gamma
+
+    Args:
+        alpha: Weight for False Negatives (higher penalizes missed lesions like MA). Default 0.7.
+        beta: Weight for False Positives (controls false alarms). Default 0.3.
+        gamma: Focal exponent focusing gradient on hard-to-segment examples. Default 1.33.
+        smooth: Laplace smoothing constant. Default 1e-6.
+    """
+
+    def __init__(
+        self,
+        alpha: float = 0.7,
+        beta: float = 0.3,
+        gamma: float = 1.33,
+        smooth: float = 1e-6
+    ):
+        super().__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
+        self.smooth = smooth
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        probs = torch.sigmoid(logits)
+        num_channels = logits.size(1)
+        channel_losses = []
+
+        for c in range(num_channels):
+            p = probs[:, c].reshape(-1)
+            t = targets[:, c].reshape(-1)
+
+            tp = (p * t).sum()
+            fp = (p * (1.0 - t)).sum()
+            fn = ((1.0 - p) * t).sum()
+
+            tversky = (tp + self.smooth) / (tp + self.alpha * fn + self.beta * fp + self.smooth)
+            focal_tversky = (1.0 - tversky) ** self.gamma
+            channel_losses.append(focal_tversky)
+
+        return sum(channel_losses) / max(num_channels, 1)
+
+
+
 class CategoricalFocalLoss(nn.Module):
     """Multi-class Categorical Focal Loss with Label Smoothing for imbalanced ordinal DR grading.
 

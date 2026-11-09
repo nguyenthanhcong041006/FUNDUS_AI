@@ -111,9 +111,9 @@ class MultiChannelFocalDiceLoss(nn.Module):
 
     def __init__(
         self,
-        focal_weight: float = 0.1,
-        dice_weight: float = 0.9,
-        pos_weight: float = 12.0,
+        focal_weight: float = 0.25,
+        dice_weight: float = 0.75,
+        pos_weight: float = 4.0,
         gamma: float = 2.0,
         alpha: float = 0.8,
         smooth: float = 1e-6

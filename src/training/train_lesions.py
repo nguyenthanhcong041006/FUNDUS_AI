@@ -43,14 +43,15 @@ def extract_eroded_fov_mask(
     erode_kernel: int = 7,
     diff_thresh: float = 0.06
 ) -> torch.Tensor:
-    """Tạo mặt nạ vùng nhìn thấy (FOV Mask) bền vững trước nhiễu nén JPEG:
+    """Extracts a robust Field of View (FOV) mask resistant to JPEG compression artifacts:
 
-    - Lấy mẫu trên cả 4 góc khung ảnh (8x8) và chặn ngưỡng an toàn (clamp) cho bg_val.
-    - Dùng erode_kernel=7 (co ~3px) để lột sạch viền quang học mà không cắt lẹm tổn thương chu biên.
+    - Samples all 4 frame corners (8x8 pixels) with median filtering and clamps bg_val.
+    - Applies light morphological erosion (kernel=7, ~3px) to strip optical vignetting rims
+      while preserving 99.65% of peripheral retinal lesions.
     """
     with torch.no_grad():
         B, C, H, W = images.shape
-        # 1. Lấy mẫu 4 góc ảnh (8x8) để tránh nhiễu cục bộ hoặc artifact ở 1 góc đơn lẻ
+        # 1. Sample 4 frame corners (8x8) to guard against localized noise or watermarks
         c1 = images[:, :, 0:8, 0:8]
         c2 = images[:, :, 0:8, W - 8:W]
         c3 = images[:, :, H - 8:H, 0:8]
@@ -62,23 +63,23 @@ def extract_eroded_fov_mask(
             c4.reshape(B, C, -1)
         ], dim=-1)
 
-        # Dùng median thay vì mean để kháng nhiễu hạt (outlier pixels) và chặn trần an toàn
+        # Use median instead of mean for outlier resistance, then clamp safe background range
         bg_val = torch.median(corners, dim=-1).values.view(B, C, 1, 1)
         if images.min() >= 0.0:
             bg_val = torch.clamp(bg_val, min=0.0, max=0.08)
         else:
             bg_val = torch.clamp(bg_val, max=-1.2)
 
-        # 2. Tính độ lệch trên kênh Red & Green (2 kênh chứa toàn bộ cấu trúc nhãn cầu)
+        # 2. Compute absolute deviation across Red & Green channels (dominant fundus reflectance)
         rg_diff = torch.abs(images[:, :2, :, :] - bg_val[:, :2, :, :]).mean(dim=1, keepdim=True)
         fov = (rg_diff > diff_thresh).float()
 
-        # 3. Morphological Closing (kernel=5) để lấp các hố tối sinh lý trong lòng võng mạc
+        # 3. Morphological closing (kernel=5) to bridge internal retinal depressions/vessels
         pad_c = 5 // 2
         fov = F.max_pool2d(fov, kernel_size=5, stride=1, padding=pad_c)
         fov = -F.max_pool2d(-fov, kernel_size=5, stride=1, padding=pad_c)
 
-        # 4. Erode nhẹ (erode_kernel=7 -> co 3px) đủ cắt viền quang học, bảo toàn 99.65% tổn thương chu biên
+        # 4. Light erosion (kernel=7 -> ~3px radius) to strip boundary artifacts and preserve lesions
         if erode_kernel > 1:
             pad_e = erode_kernel // 2
             fov = -F.max_pool2d(-fov, kernel_size=erode_kernel, stride=1, padding=pad_e)
@@ -87,9 +88,9 @@ def extract_eroded_fov_mask(
 
 
 class FOVMaskedModelWrapper(nn.Module):
-    """Wrapper tự động áp dụng FOV Masking vào đầu ra của model.
+    """Wraps model predictions with GPU-accelerated FOV mask suppression.
 
-    Đảm bảo khi gọi plot_sample_predictions() bên ngoài, ảnh dự đoán cũng sạch viền 100%.
+    Ensures exported diagnostic overlays and sample predictions remain free of rim false positives.
     """
     def __init__(self, base_model: nn.Module, erode_kernel: int = 7):
         super().__init__()
@@ -109,9 +110,9 @@ def compute_weighted_channel_loss(
     targets: torch.Tensor,
     channel_weights: tuple[float, float, float, float] = (2.2, 1.0, 1.0, 1.6)
 ) -> torch.Tensor:
-    """Tính hàm Loss có trọng số ưu tiên riêng cho từng loại tổn thương:
+    """Computes channel-weighted multi-lesion loss to prioritize gradient for tiny structures.
 
-    Ưu tiên đẩy mạnh Gradient cho MA (kênh 0: 2.2) và SE (kênh 3: 1.6) vốn có diện tích rất nhỏ.
+    Prioritizes gradient flow for microaneurysms (Ch 0: 2.2) and soft exudates (Ch 3: 1.6).
     """
     total_loss = 0.0
     weight_sum = sum(channel_weights)
@@ -263,7 +264,7 @@ def train_lesions(
 
             fov_mask = extract_eroded_fov_mask(images, erode_kernel=erode_kernel)
             raw_logits = model(images)
-            # Triệt tiêu gradient và dự đoán giả ở vành đai rìa nhãn cầu
+            # Suppress logits and false positive gradients along the outer retinal boundary
             logits = raw_logits * fov_mask + (-12.0) * (1.0 - fov_mask)
 
             loss = compute_weighted_channel_loss(criterion, logits, masks * fov_mask)
@@ -288,7 +289,7 @@ def train_lesions(
             best_val_dice = val_res["mean_dice"]
             best_epoch = epoch
             patience_counter = 0
-            # Lưu state_dict của model gốc để tương thích 100% với toàn bộ hệ thống inference
+            # Save native model state_dict for seamless drop-in compatibility across inference pipelines
             torch.save(model.state_dict(), str(out_path))
             print(f"  [+] Saved new best lesion checkpoint to: {out_path} (Val Mean Dice: {best_val_dice:.4f})")
         else:
@@ -306,7 +307,7 @@ def train_lesions(
         print(f"[*] Reloading best checkpoint from {out_path} for final evaluation & visual analytics...")
         model.load_state_dict(torch.load(str(out_path), map_location=device))
 
-    # Bọc model bằng FOVMaskedModelWrapper để ảnh vẽ trong plot_sample_predictions sạch viền đỏ
+    # Wrap model with FOV suppression so rendered validation sample images remain artifact-free
     masked_model_for_plot = FOVMaskedModelWrapper(model, erode_kernel=erode_kernel).to(device)
     masked_model_for_plot.eval()
 

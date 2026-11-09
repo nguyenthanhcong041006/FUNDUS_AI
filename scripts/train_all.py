@@ -101,6 +101,50 @@ TASKS = [
 
 TASK_BY_KEY = {t["key"]: t for t in TASKS}
 TASK_BY_NAME = {t["name"]: t for t in TASKS}
+DEFAULT_KEYS = [t["key"] for t in TASKS if not t.get("optional")]      # what "all" trains: the 6 modules M1..M6
+TASK_ALIASES = {"m1": "optic_disc_cup", "m2": "vessels", "m3": "artery_vein", "m4": "lesions",
+                "m4s": "patch_lesions", "m5": "dr_grading", "m6": "multi_disease"}
+
+
+def resolve_keys(text):
+    """'M1,m4 vessels' -> (['optic_disc_cup', 'lesions', 'vessels'], []) ; second item = unknown names.
+    'all' means the 6 default modules. Result keeps the order of TASKS."""
+    keys, bad = set(), []
+    for part in re.split(r"[,\s]+", (text or "").strip()):
+        if not part:
+            continue
+        n = part.lower().replace("-", "_")
+        if n == "all":
+            keys.update(DEFAULT_KEYS)
+            continue
+        n = TASK_ALIASES.get(n, n)
+        if n in TASK_BY_KEY:
+            keys.add(n)
+        else:
+            bad.append(part)
+    return [t["key"] for t in TASKS if t["key"] in keys], bad
+
+
+def parse_task_opts(text):
+    """'--epochs 30 --batch-size 4 --norm group' -> dict(epochs=30, batch=4, image_size=None, extra=['--norm','group'])."""
+    toks = [a.strip('"') for a in shlex.split(text, posix=False)]
+    names = {"--epochs": "epochs", "--batch-size": "batch", "--batch_size": "batch",
+             "--image-size": "image_size", "--image_size": "image_size"}
+    opts = dict(epochs=None, batch=None, image_size=None, extra=[])
+    i = 0
+    while i < len(toks):
+        name, eq, val = toks[i].partition("=")
+        if name in names:
+            if not eq:
+                i += 1
+                val = toks[i] if i < len(toks) else ""
+            if not val.isdigit() or int(val) <= 0:
+                raise ValueError(f"{name} can mot so nguyen duong (nhan duoc '{val}')")
+            opts[names[name]] = int(val)
+        else:
+            opts["extra"].append(toks[i])
+        i += 1
+    return opts
 
 EPOCH_RE = re.compile(r"^Epoch \[(\d+)/(\d+)\]\s*-\s*(.*)$")
 METRIC_RE = re.compile(r"([A-Za-z][A-Za-z0-9 ]*?):\s*(-?[\d.]+)%?")
@@ -484,8 +528,9 @@ def preflight(tasks, run_dir, log, args):
             if res["status"] == "FAIL":
                 log(f"  [SKIP] {t['name']} (da loi o buoc kiem tra du lieu)")
                 continue
-            cmd = [PY, "-u", "-m", t["module"], *t["extra"], "--epochs", "1", "--limit", "8", "--batch_size", "2",
-                   "--image_size", str(min(args.image_size, 256)),
+            cmd = [PY, "-u", "-m", t["module"], *t["extra"], *args.task_cfg[t["key"]]["extra"],
+                   "--epochs", "1", "--limit", "8", "--batch_size", "2",
+                   "--image_size", str(min(args.task_cfg[t["key"]]["image_size"], 256)),
                    "--output_checkpoint", str(smoke_dir / f"{t['key']}.pth"), "--plot_dir", str(smoke_dir / t["key"])]
             t0 = time.time()
             try:
@@ -518,15 +563,17 @@ def choose_batch_sizes(tasks, dev, run_dir, log, args, previous=None):
     free_gb = dev.get("gpu_free_gb") if dev else None
     chosen = {}
     for t in tasks:
-        if args.batch_size:
-            bs, reason = args.batch_size, "nguoi dung chi dinh --batch-size"
+        tc = args.task_cfg[t["key"]]
+        img, ov = tc["image_size"], tc.get("batch")
+        if ov:
+            bs, reason = ov, "nguoi dung chi dinh"
         elif previous and t["key"] in previous:
             bs, reason = previous[t["key"]], "giu nguyen nhu luc bat dau run nay"
         else:
             bs, reason = t["bs"], f"can ~{t['peak_gb']} GB VRAM"
-            if args.image_size != 512:
-                reason += f" (do o 512px; dang dung {args.image_size}px)"
-        if free_gb is not None and not args.batch_size and args.image_size == 512 and t["peak_gb"] > free_gb * 0.95:
+            if img != 512:
+                reason += f" (do o 512px; dang dung {img}px)"
+        if free_gb is not None and not ov and img == 512 and t["peak_gb"] > free_gb * 0.95:
             reason += f" | CANH BAO: VRAM trong chi {free_gb} GB -> dong bot app hoac dung --batch-size nho hon"
         chosen[t["key"]] = dict(bs=bs, reason=reason)
         log(f"  {t['name']:<34} batch = {bs:<3} ({reason})")
@@ -556,9 +603,10 @@ def train_task(t, bs, epochs, run_dir, dev, log, args):
     plot_dir = run_dir / "plots" / t["key"]
     state_file = state_path_for(ckpt)
     resuming = state_file.exists()      # saved by the training script after every finished epoch
-    cmd = [PY, "-u", "-m", t["module"], *t["extra"], *getattr(args, "extra_args", []),
+    img = args.task_cfg[t["key"]]["image_size"]
+    cmd = [PY, "-u", "-m", t["module"], *t["extra"], *getattr(args, "extra_args", []), *args.task_cfg[t["key"]]["extra"],
            "--epochs", str(epochs), "--batch_size", str(bs),
-           "--image_size", str(args.image_size), "--output_checkpoint", str(ckpt), "--plot_dir", str(plot_dir)]
+           "--image_size", str(img), "--output_checkpoint", str(ckpt), "--plot_dir", str(plot_dir)]
     if resuming:
         cmd.append("--resume")
     device_str = f"cuda:0 {dev.get('gpu_name')}" if dev and dev.get("cuda_available") else "cpu"
@@ -597,7 +645,7 @@ def train_task(t, bs, epochs, run_dir, dev, log, args):
     epoch_jsonl = open(jsonl_path, mode, encoding="utf-8")
 
     header = (f"# {t['name']} | {'resume' if resuming else 'start'} {now()} | device {device_str} | batch {bs} | "
-              f"epochs {epochs} | image {args.image_size}px | git {dev.get('git_commit', '') if dev else ''}\n"
+              f"epochs {epochs} | image {img}px | git {dev.get('git_commit', '') if dev else ''}\n"
               f"# cmd: {' '.join(cmd)}\n")
     console_log.write(header)
     log(f"\n{'-' * 78}\n >>> {t['name']}  |  batch {bs}  |  {epochs} epoch  |  {device_str}"
@@ -652,7 +700,7 @@ def train_task(t, bs, epochs, run_dir, dev, log, args):
                     metrics = parse_metrics(m.group(3))
                     rec = dict(timestamp=now(), task=t["key"], epoch=ep, total_epochs=total,
                                epoch_seconds=round(ep_sec, 1), elapsed_seconds=round(elapsed, 1),
-                               eta_seconds=round(eta, 1), batch_size=bs, image_size=args.image_size,
+                               eta_seconds=round(eta, 1), batch_size=bs, image_size=img,
                                device=device_str, **gpu_stats(), **ram_stats(), **metrics)
                     epoch_jsonl.write(json.dumps(rec, ensure_ascii=False) + "\n")
                     epoch_jsonl.flush()
@@ -747,12 +795,13 @@ def approve_run(run_name, keys, log, assume_yes=False):
         print(f"  {t['name']:<34} {r.get('epochs_done', '?')}/{r.get('epochs_planned', '?')} epoch | {r.get('duration', '')}")
         print(f"      checkpoint : {ckpt.relative_to(ROOT)} -> {t['checkpoint']}" + ("  (giong het ban dang dung)" if same else ""))
         print(f"      bieu do    : {plots.relative_to(ROOT) if plots.is_dir() else '(khong co)'} -> outputs/plots/{t['key']}/")
+        print(f"      log        : logs/{t['key']}.* -> outputs/logs/train/{run_dir.name}/")
     if not assume_yes:
         if not sys.stdin or not sys.stdin.isatty():
             print("\n[X] Can xac nhan: chay lai voi --yes (hoac chay train.bat --approve trong cua so terminal).")
             return 2
         try:
-            ans = input("\nDuyet va sao chep cac muc tren vao checkpoints/ va outputs/plots/? (ban cu duoc sao luu) [y/N]: ")
+            ans = input("\nDuyet va sao chep cac muc tren ra checkpoints/ va outputs/ cua project? (ban cu duoc sao luu) [y/N]: ")
         except EOFError:
             ans = ""
         if ans.strip().lower() not in ("y", "yes"):
@@ -779,6 +828,14 @@ def approve_run(run_name, keys, log, assume_yes=False):
         entries.append(dict(task=t["key"], checkpoint=t["checkpoint"], md5=file_md5(dst), plots=copied_plots))
         tlog(f"[{now()}] {t['name']}: {t['checkpoint']} <- {ckpt.relative_to(ROOT)}"
              + (f" | outputs/plots/{t['key']}/ cap nhat" if copied_plots else ""))
+    out_logs = ROOT / "outputs" / "logs" / "train" / run_dir.name
+    out_logs.mkdir(parents=True, exist_ok=True)
+    for t, _c, _p, _d, _pd in plan:
+        for f in (run_dir / "logs").glob(f"{t['key']}.*"):
+            shutil.copy2(f, out_logs / f.name)
+    if (run_dir / "SUMMARY.md").is_file():
+        shutil.copy2(run_dir / "SUMMARY.md", out_logs / "SUMMARY.md")
+    tlog(f"  Log tung epoch + SUMMARY.md: {out_logs.relative_to(ROOT)}/")
     hist_path = run_dir / "approved.json"
     hist = json.loads(hist_path.read_text(encoding="utf-8")) if hist_path.is_file() else []
     hist.append(dict(time=now(), items=entries, backup=str(backup_root.relative_to(ROOT))))
@@ -883,6 +940,20 @@ def show_training_status():
     return 0
 
 
+def latest_unapproved_run():
+    """Newest run that has DONE tasks which were not approved yet (None if there is no such run)."""
+    for d in sorted((p for p in (ROOT / "runs").glob("2*") if p.is_dir()), reverse=True):
+        st = load_run_state(d)
+        if not st:
+            continue
+        ap_file = d / "approved.json"
+        approved = {e["task"] for h in (json.loads(ap_file.read_text(encoding="utf-8")) if ap_file.is_file() else [])
+                    for e in h["items"]}
+        if [k for k, v in st["tasks"].items() if v["status"] == "DONE" and k not in approved]:
+            return d.name
+    return None
+
+
 def interactive_menu(args):
     """Interactive CLI menu when train.bat is run with no arguments."""
     resumable_dir, resumable_st = find_resumable_run()
@@ -913,6 +984,7 @@ def interactive_menu(args):
     print("    [4] Kiem tra du lieu va thiet bi truoc (--check-only)")
     print("    [5] Chay thu 1 epoch/8 anh moi bai (--smoke)")
     print("    [6] Xem lich su & tien do cac run (train toi dau)")
+    print("    [7] DUYET ket qua mot run (copy checkpoint + bieu do + log ra project)")
     print("    [0] Thoat")
 
     prompt = "\n  Nhap lua chon [1]: " if resumable_st else "\n  Nhap lua chon [1-6, 0]: "
@@ -980,6 +1052,14 @@ def interactive_menu(args):
     elif choice == "6":
         show_training_status()
         sys.exit(0)
+    elif choice == "7":
+        try:
+            run_in = input(f"  Ten run trong runs/ (Enter = run moi nhat chua duyet: {latest_unapproved_run()}): ").strip()
+            task_in = input("  Bai can duyet, vd M1,M4 (Enter = tat ca bai DONE cua run): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            sys.exit(0)
+        args.approve = run_in or "latest"
+        args.tasks = task_in or "all"
     elif choice == "0":
         print("[i] Thoat.")
         sys.exit(0)
@@ -991,8 +1071,8 @@ def interactive_menu(args):
 # ---------------------------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="FUNDUS AI - train all tasks")
-    ap.add_argument("--tasks", default="all", help="vd: vessels,lesions (mac dinh: all). Khoa: " +
-                    ",".join(t["key"] for t in TASKS))
+    ap.add_argument("--tasks", default="all", help="vd: M1,M4 hoac vessels,lesions (mac dinh: all = 6 bai M1..M6). "
+                    "Khoa: " + ",".join(t["key"] for t in TASKS))
     ap.add_argument("--epochs", type=int, default=None, help="ghi de so epoch cho moi bai toan")
     ap.add_argument("--batch-size", dest="batch_size", type=int, default=None, help="ghi de batch co dinh cho moi bai")
     ap.add_argument("--image-size", dest="image_size", type=int, default=None, help="mac dinh 512")
@@ -1001,17 +1081,25 @@ def main():
     ap.add_argument("--extra", default=None, metavar='"ARGS"',
                     help='tham so them cho script train cua cac bai da chon, vd: --extra "--lr 0.0001 --patience 8" '
                          '(de ghi de mac dinh; dung --batch-size/--epochs/--image-size cho 3 tham so do)')
-    ap.add_argument("--approve", metavar="RUN", default=None,
-                    help="DUYET: sao chep checkpoint + bieu do cua RUN vao checkpoints/ va outputs/plots/ "
-                         "(dung --tasks de chon bai, --yes de bo qua cau hoi)")
+    ap.add_argument("--approve", metavar="RUN", nargs="?", const="latest", default=None,
+                    help="DUYET ket qua mot run: copy checkpoint -> checkpoints/, bieu do -> outputs/plots/<bai>/, "
+                         "log -> outputs/logs/train/<run>/. Khong ghi RUN = run moi nhat chua duyet. "
+                         "Dung --tasks M1,M4 de chi duyet mot so bai (mac dinh: moi bai da DONE), --yes de khong hoi")
     ap.add_argument("--yes", action="store_true", help="dung voi --approve: khong hoi xac nhan")
     ap.add_argument("--promote", action="store_true",
                     help="tu dong duyet: chep ngay checkpoint + bieu do moi vao checkpoints/ khi tung bai train xong")
     ap.add_argument("--no-promote", action="store_true", help=argparse.SUPPRESS)  # cu: khong con tu chep mac dinh
     ap.add_argument("--require-gpu", action="store_true", help="dung lai neu khong co GPU")
     ap.add_argument("--new", action="store_true", help="bat dau run moi, KHONG tiep tuc run dang do")
-    ap.add_argument("--resume", metavar="RUN", default=None,
-                    help="tiep tuc dung run nay trong runs/ (mac dinh: tu dong lay run dang do moi nhat)")
+    ap.add_argument("--resume", metavar="RUN", nargs="?", const="latest", default=None,
+                    help="tiep tuc run dang do (khong ghi RUN = run dang do moi nhat). Chay train.bat khong tham so "
+                         "cung tu dong tiep tuc run dang do")
+    ap.add_argument("--set", action="append", metavar='TASK="ARGS"',
+                    help='cau hinh rieng tung bai, vd: --set M4="--epochs 35 --batch-size 2 --lr 0.0002" '
+                         '(co the lap lai; TASK = M1..M6, M4S hoac ten bai)')
+    for _alias, _key in TASK_ALIASES.items():
+        ap.add_argument(f"--{_alias}", dest=f"opt_{_alias}", default=None, metavar='"ARGS"',
+                        help=f"chon bai {_alias.upper()} ({_key}) va cau hinh rieng, vd: --{_alias} \"--epochs 30\"")
     ap.add_argument("--status", action="store_true", help="xem lich su va tien do cac run (train toi dau)")
     ap.add_argument("--menu", action="store_true", help="hien thi bang dieu khien interactive de chon module")
     ap.add_argument("--_devinfo", action="store_true", help=argparse.SUPPRESS)
@@ -1021,24 +1109,46 @@ def main():
         return helper_devinfo()
     if args.status:
         return show_training_status()
-    if (len(sys.argv) == 1 or args.menu) and sys.stdin and sys.stdin.isatty():
+    if args.menu and sys.stdin and sys.stdin.isatty():
         interactive_menu(args)
     if args.new and args.resume:
         print("[!] Khong dung --new cung --resume.")
         return 2
     if args.approve:
-        keys = [] if args.tasks == "all" else [k.strip() for k in args.tasks.split(",") if k.strip()]
-        unknown = [k for k in keys if k not in TASK_BY_KEY]
-        if unknown:
-            print(f"[!] Khong biet bai toan: {unknown}. Hop le: {list(TASK_BY_KEY)}")
+        keys, bad = resolve_keys(args.tasks) if args.tasks != "all" else ([], [])
+        if bad:
+            print(f"[!] Khong biet bai toan: {bad}. Hop le: M1..M6, M4S hoac {list(TASK_BY_KEY)}")
             return 2
-        return approve_run(args.approve, keys, print, assume_yes=args.yes)
+        run_name = latest_unapproved_run() if args.approve == "latest" else args.approve
+        if not run_name:
+            print("[i] Khong co run nao co bai DONE chua duyet.")
+            return 0
+        return approve_run(run_name, keys, print, assume_yes=args.yes)
     try:
         extra_args = shlex.split(args.extra, posix=False) if args.extra else []
     except ValueError as exc:
         print(f"[!] --extra khong hop le: {exc}")
         return 2
     extra_args = [a.strip('"') for a in extra_args]
+    task_opts = {}
+    try:
+        for spec in args.set or []:
+            name, _, val = spec.partition("=")
+            ks, bad = resolve_keys(name)
+            if bad or len(ks) != 1 or name.strip().lower() == "all":
+                print(f'[!] --set can dang TASK="ARGS" voi TASK la 1 bai (M1..M6, M4S): nhan duoc "{spec}"')
+                return 2
+            task_opts[ks[0]] = parse_task_opts(val)
+        for alias, key in TASK_ALIASES.items():
+            val = getattr(args, f"opt_{alias}")
+            if val is not None:
+                task_opts[key] = parse_task_opts(val)
+    except ValueError as exc:
+        print(f"[!] Cau hinh bai khong hop le: {exc}")
+        return 2
+    config_flags = [f for f, v in (("--tasks", args.tasks != "all"), ("--epochs", args.epochs),
+                                   ("--batch-size", args.batch_size), ("--image-size", args.image_size),
+                                   ("--extra", args.extra), ("--set/--m1..--m6", task_opts)) if v]
 
     # ---- continue an unfinished run? -------------------------------------------------------
     run_dir, rstate = None, None
@@ -1050,8 +1160,9 @@ def main():
                 print(f"      PID {pid}: ...{cmd}")
             print("    Dong cua so train do (hoac Ctrl+C trong cua so do) roi chay lai train.bat.")
             return 3
-        if not args.new:
-            run_dir, rstate = find_resumable_run(args.resume)
+        # train.bat with no settings (or --resume) continues the unfinished run; any setting starts a new run
+        if not args.new and (args.resume or not config_flags):
+            run_dir, rstate = find_resumable_run(None if args.resume in (None, "latest") else args.resume)
             if args.resume and not run_dir:
                 print(f"[X] Khong tiep tuc duoc '{args.resume}': khong co trong runs/, chua tung train, hoac da xong het.")
                 return 2
@@ -1060,8 +1171,7 @@ def main():
     if rstate:
         cfg = rstate["config"]
         tasks = [TASK_BY_KEY[k] for k in cfg["tasks"]]
-        ignored = [f for f, v in (("--tasks", args.tasks != "all"), ("--epochs", args.epochs),
-                                  ("--image-size", args.image_size), ("--extra", args.extra)) if v]
+        ignored = config_flags
         args.image_size = cfg["image_size"]
         extra_args = cfg.get("extra", [])
         log = Tee(run_dir / "train_log.txt")
@@ -1075,13 +1185,16 @@ def main():
         log("=" * 78)
         todo = [t for t in tasks if rstate["tasks"][t["key"]]["status"] not in FINAL_STATUSES]
     else:
-        default_keys = [t["key"] for t in TASKS if not t.get("optional")]
-        keys = [t["key"] for t in TASKS]
-        sel = default_keys if args.tasks == "all" else [k.strip() for k in args.tasks.split(",") if k.strip()]
-        unknown = [k for k in sel if k not in keys]
-        if unknown:
-            print(f"[!] Khong biet bai toan: {unknown}. Hop le: {keys}")
+        if args.tasks != "all":
+            sel, unknown = resolve_keys(args.tasks)
+        else:                                  # default: all 6 modules, or the modules given with --m1..--m6 / --set
+            sel, unknown = (list(task_opts) if task_opts else DEFAULT_KEYS), []
+        if unknown or not sel:
+            print(f"[!] Khong biet bai toan: {unknown}. Hop le: M1..M6, M4S hoac {list(TASK_BY_KEY)}")
             return 2
+        stray = [k for k in task_opts if k not in sel]
+        if stray:
+            print(f"[!] Cau hinh cho {stray} bi bo qua vi bai do khong nam trong --tasks")
         tasks = todo = [t for t in TASKS if t["key"] in sel]
         args.image_size = args.image_size or 512
         run_dir = ROOT / "runs" / dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1095,6 +1208,19 @@ def main():
             log(f" Tham so them (--extra): {' '.join(extra_args)}")
         log("=" * 78)
     args.extra_args = extra_args
+    args.task_cfg = {}                     # resolved per-task settings: epochs, batch (None = fixed default), image, extra
+    for t in tasks:
+        k = t["key"]
+        if rstate:
+            args.task_cfg[k] = dict(epochs=cfg["epochs"].get(k, t["epochs"]), batch=None,
+                                    image_size=cfg.get("image_sizes", {}).get(k, cfg["image_size"]),
+                                    extra=cfg.get("extra_by_task", {}).get(k, []))
+        else:
+            o = task_opts.get(k, {})
+            args.task_cfg[k] = dict(epochs=o.get("epochs") or args.epochs or t["epochs"],
+                                    batch=o.get("batch") or args.batch_size,
+                                    image_size=o.get("image_size") or args.image_size,
+                                    extra=o.get("extra", []))
     run_started = rstate.get("started", started) if rstate else started
 
     # ---- preflight + batch sizes (only for the tasks that still need training) ----------------
@@ -1116,6 +1242,12 @@ def main():
 
     chosen = choose_batch_sizes(runnable, dev, run_dir, log, args,
                                 previous=rstate["config"]["batch"] if rstate else None)
+    log("\n  CAU HINH TUNG BAI")
+    for t in runnable:
+        k, tc = t["key"], args.task_cfg[t["key"]]
+        ep = rstate["config"]["epochs"][k] if rstate else tc["epochs"]
+        log(f"    {t['name']:<34} epoch {ep:<3} batch {chosen[k]['bs']:<3} anh {tc['image_size']}px"
+            + (f" | them: {' '.join(extra_args + tc['extra'])}" if extra_args or tc["extra"] else ""))
     if args.check_only:
         log("\n[i] --check-only: dung truoc khi train.")
         write_summary(run_dir, dev, report, chosen, {}, tasks, run_started, log)
@@ -1124,9 +1256,11 @@ def main():
     if not rstate:
         rstate = dict(version=1, run=run_dir.name, started=started, sessions=[],
                       config=dict(tasks=[t["key"] for t in tasks],
-                                  epochs={t["key"]: args.epochs or t["epochs"] for t in tasks},
+                                  epochs={t["key"]: args.task_cfg[t["key"]]["epochs"] for t in tasks},
                                   batch={t["key"]: chosen.get(t["key"], {}).get("bs", t["bs"]) for t in tasks},
-                                  image_size=args.image_size, extra=extra_args),
+                                  image_size=args.image_size, extra=extra_args,
+                                  image_sizes={t["key"]: args.task_cfg[t["key"]]["image_size"] for t in tasks},
+                                  extra_by_task={t["key"]: args.task_cfg[t["key"]]["extra"] for t in tasks}),
                       tasks={t["key"]: dict(status="PENDING") for t in tasks})
     for t in blocked:
         rstate["tasks"][t["key"]] = dict(status="BLOCKED", problems=report["tasks"][t["key"]]["problems"])

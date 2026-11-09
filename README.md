@@ -272,24 +272,36 @@ Double-click `train.bat` hoặc chạy trong terminal ở thư mục gốc dự 
 1. **Kiểm tra trước khi train (~10 giây):** package Python, GPU/CUDA, ổ đĩa, manifest và **từng file ảnh/mask** trong manifest. Bài nào thiếu dữ liệu được báo `CHUA TRAIN DUOC` kèm lý do và bị bỏ qua.
 2. **Batch size cố định** đã đo cho RTX 4060 Laptop 8 GB @ 512px: M1 batch 4, M2–M4 batch 2, M5 batch 12, M6 batch 8 (đổi bằng `--batch-size`).
 3. **Train lần lượt 6 module**, hiện thanh tiến trình trực tiếp và một dòng tóm tắt sau mỗi epoch (thời gian epoch, ETA, VRAM/% GPU/nhiệt độ, RAM).
-4. **Duyệt rồi mới chép:** kết quả train nằm trong `runs/<ngày_giờ>/`, **không tự ghi đè** `checkpoints/` và `outputs/plots/`. Xem `SUMMARY.md` xong mới duyệt bằng `--approve` (hoặc trả lời `y` ở câu hỏi cuối lần train); bản cũ được sao lưu vào `runs/<run>/approved_backup/<ngày_giờ>/`.
+4. **Duyệt rồi mới chép:** kết quả train nằm trong `runs/<ngày_giờ>/`, **không tự ghi đè** project. Xem `SUMMARY.md` xong mới duyệt bằng `--approve` (từng bài hoặc cả run, hoặc trả lời `y` ở câu hỏi cuối lần train). Khi duyệt: checkpoint → `checkpoints/`, biểu đồ → `outputs/plots/<bài>/`, log từng epoch + SUMMARY → `outputs/logs/train/<run>/`; bản cũ được sao lưu vào `runs/<run>/approved_backup/<ngày_giờ>/`.
 
 ```bat
-train.bat                            :: kiểm tra + train tất cả (hoặc TIẾP TỤC run đang dở)
+REM --- TRAIN (M1 optic_disc_cup | M2 vessels | M3 artery_vein | M4 lesions | M5 dr_grading | M6 multi_disease) ---
+train.bat                            :: KHÔNG tham số = train toàn bộ 6 bài M1..M6 (nếu đang có run dở thì tự TIẾP TỤC run đó)
+train.bat --tasks M1,M4              :: chỉ train M1 và M4 (cũng dùng được tên bài: vessels,lesions)
+train.bat --epochs 5 --batch-size 4  :: ghi đè epoch / batch cho TẤT CẢ bài đã chọn
+train.bat --m1 "--epochs 30 --batch-size 4 --norm group --patience 10" --m4 "--epochs 35 --lr 0.0002"
+                                     :: cấu hình RIÊNG từng bài bằng --m1..--m6 (chỉ bài có --mN được train);
+                                     :: --epochs/--batch-size/--image-size do train.bat xử lý, tham số khác chuyển thẳng cho script train
+train.bat --set M4="--epochs 35"     :: giống --m4, có thể lặp lại; --extra "--patience 8" thêm tham số cho mọi bài đã chọn
 train.bat --check-only               :: chỉ kiểm tra thiết bị + dữ liệu, không train
-train.bat --tasks vessels,lesions    :: chỉ train vài bài (optic_disc_cup, vessels, artery_vein, lesions, dr_grading, multi_disease)
-train.bat --epochs 5                 :: ghi đè số epoch cho mọi bài (mặc định 25-50, có early stopping)
-train.bat --batch-size 4             :: ghi đè batch size cố định
 train.bat --smoke                    :: chạy thử 1 epoch / 8 ảnh mỗi bài trước khi train thật (~1 phút)
-train.bat --tasks lesions --epochs 35 --batch-size 2 --image-size 512      :: train mới 1 bài với cấu hình cụ thể
-train.bat --tasks lesions --extra "--lr 0.0001 --patience 8"               :: thêm tham số riêng của script train (ghi đè mặc định)
-train.bat --approve 20261109_093724 --tasks optic_disc_cup,lesions         :: DUYỆT: chép checkpoint + biểu đồ của run vào checkpoints/ và outputs/plots/
-train.bat --promote                  :: tự duyệt, chép ngay khi từng bài train xong (mặc định KHÔNG tự chép)
-train.bat --new                      :: train mới từ đầu, KHÔNG tiếp tục run đang dở
-train.bat --resume 20261107_143800   :: tiếp tục đúng một run cụ thể trong runs/
+train.bat --new                      :: luôn train mới từ đầu (có cấu hình bất kỳ như --tasks/--mN thì cũng luôn tạo run MỚI)
+
+REM --- RESUME ---
+train.bat                            :: tự tiếp tục run đang dở
+train.bat --resume 20261107_143800   :: tiếp tục đúng một run cụ thể (không ghi tên = run dở mới nhất)
+train.bat --status                   :: xem lịch sử và tiến độ các run
+
+REM --- APPROVE (duyệt): copy kết quả của run ra project ---
+train.bat --approve                  :: duyệt run mới nhất chưa duyệt (mọi bài DONE), có hỏi xác nhận
+train.bat --approve 20261109_093724  :: duyệt tất cả bài DONE của run đó
+train.bat --approve 20261109_093724 --tasks M1,M4        :: chỉ duyệt M1 và M4 của run đó
+train.bat --approve 20261107_143800 --tasks M2,M3,M5,M6 --yes   :: không hỏi xác nhận
+train.bat --promote                  :: (lúc train) tự duyệt ngay khi từng bài xong (mặc định KHÔNG tự chép)
+train.bat --menu                     :: bảng điều khiển tương tác (train / resume / duyệt / xem tiến độ)
 ```
 
-**Tạm dừng / tiếp tục (resume):** bấm `Ctrl+C` hoặc đóng cửa sổ bất kỳ lúc nào. Lần sau chạy lại `train.bat`, script **tự động tiếp tục run đang dở**: bài đã xong được bỏ qua, bài đang train chạy tiếp từ epoch đã xong gần nhất (chỉ mất phần epoch đang chạy dở). Cơ chế:
+**Tạm dừng / tiếp tục (resume):** bấm `Ctrl+C` hoặc đóng cửa sổ bất kỳ lúc nào. Lần sau chạy lại `train.bat` (không tham số) hoặc `train.bat --resume`, script **tự động tiếp tục run đang dở**: bài đã xong được bỏ qua, bài đang train chạy tiếp từ epoch đã xong gần nhất (chỉ mất phần epoch đang chạy dở). Cơ chế:
 * Sau mỗi epoch, script train lưu `<checkpoint>_last.pth` (model, optimizer, scheduler, RNG, epoch, best metric, bộ đếm early stopping, history) — ghi an toàn (file tạm + đổi tên) nên mất điện giữa chừng cũng không hỏng. File này tự xoá khi bài train xong.
 * `runs/<ngày_giờ>/run_state.json` ghi trạng thái từng bài (`DONE`, `RUNNING`, `INTERRUPTED`, `FAILED`, ...).
 * Nếu đang có một tiến trình train khác chạy, `train.bat` từ chối chạy để tránh tranh GPU và ghi đè log.
@@ -306,7 +318,7 @@ train.bat --resume 20261107_143800   :: tiếp tục đúng một run cụ thể
 | `device_info.json`, `preflight.json`, `batch_sizes.json`, `run_state.json` | Thông tin thiết bị, kết quả kiểm tra, batch size, trạng thái resume |
 | `checkpoints/`, `plots/` | Checkpoint và biểu đồ của run này |
 
-> `train.bat` dùng Python global `C:\Program Files\Python310\python.exe` (nếu có), hoặc đặt biến môi trường `FUNDUS_PYTHON` trỏ tới `python.exe` khác.
+> `train.bat` chọn Python theo thứ tự: biến môi trường `FUNDUS_PYTHON`, `.venv` (chỉ khi chạy được trên máy này), `C:\Program Files\Python310\python.exe`, rồi `python` trong PATH.
 
 Các mục 1.1–1.6 bên dưới là lệnh train / đánh giá **từng module riêng lẻ**. Mỗi mô hình chịu trách nhiệm một tác vụ chuyên biệt theo thiết kế chuẩn của **FUNDUS_AI_Dataset_Training_Plan_2.md**:
 

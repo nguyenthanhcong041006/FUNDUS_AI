@@ -7,6 +7,7 @@ Eliminates boundary discontinuities and grid artifacts.
 
 from typing import Tuple, Dict, Any, List, Optional
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 from PIL import Image
@@ -113,17 +114,13 @@ def evaluate_patch_model_full_images(
     channel_dices = [[] for _ in range(4)]
 
     def _load_single_mask(mask_path, orig_h, orig_w):
-        if not mask_path or pd_isna(mask_path) or str(mask_path).strip() == "":
+        if not mask_path or pd.isna(mask_path) or str(mask_path).strip() == "":
             return np.zeros((orig_h, orig_w), dtype=np.uint8)
         p = resolve_path(mask_path)
         if not p.is_file():
             return np.zeros((orig_h, orig_w), dtype=np.uint8)
         m = Image.open(p).convert("L")
         return (np.array(m, dtype=np.uint8) > 0).astype(np.uint8)
-
-    def pd_isna(val):
-        import pandas as pd
-        return pd.isna(val)
 
     for rec in tqdm(records, desc="[Sliding Window Eval]", leave=False):
         img_path = resolve_path(rec["image_path"])

@@ -9,8 +9,11 @@ REM    train.bat --tasks vessels,lesions      chi train mot so bai toan
 REM    train.bat --epochs 5                   ghi de so epoch cho moi bai toan
 REM    train.bat --batch-size 4               ghi de batch co dinh (mac dinh da toi uu cho RTX 4060 8GB)
 REM    train.bat --smoke                      chay thu 1 epoch/8 anh moi bai truoc khi train (~1 phut)
-REM    train.bat --no-promote                 khong chep checkpoint moi vao checkpoints\
-REM    train.bat --new                        train moi tu dau, KHONG tiep tuc run dang do
+REM    train.bat --extra "--lr 0.0001 --patience 8"   them tham so rieng cho script train cua cac bai da chon
+REM    train.bat --approve 20261109_093724 --tasks lesions   DUYET: chep checkpoint + bieu do cua run vao
+REM                                           checkpoints\ va outputs\plots\ (ban cu sao luu trong runs\<run>\approved_backup\)
+REM    train.bat --promote                    tu duyet: chep ngay khi tung bai train xong (mac dinh KHONG tu chep)
+REM    train.bat --new                       train moi tu dau, KHONG tiep tuc run dang do
 REM    train.bat --resume 20261107_143800     tiep tuc dung run nay (mac dinh: tu lay run dang do moi nhat)
 REM
 REM  TAM DUNG / TIEP TUC: bam Ctrl+C hoac dong cua so bat ky luc nao. Lan sau chay lai train.bat

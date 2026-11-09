@@ -272,7 +272,7 @@ Double-click `train.bat` hoặc chạy trong terminal ở thư mục gốc dự 
 1. **Kiểm tra trước khi train (~10 giây):** package Python, GPU/CUDA, ổ đĩa, manifest và **từng file ảnh/mask** trong manifest. Bài nào thiếu dữ liệu được báo `CHUA TRAIN DUOC` kèm lý do và bị bỏ qua.
 2. **Batch size cố định** đã đo cho RTX 4060 Laptop 8 GB @ 512px: M1 batch 4, M2–M4 batch 2, M5 batch 12, M6 batch 8 (đổi bằng `--batch-size`).
 3. **Train lần lượt 6 module**, hiện thanh tiến trình trực tiếp và một dòng tóm tắt sau mỗi epoch (thời gian epoch, ETA, VRAM/% GPU/nhiệt độ, RAM).
-4. **Cập nhật checkpoint:** checkpoint tốt nhất mỗi bài được chép vào `checkpoints/` (đường dẫn `main.py` dùng); file cũ được sao lưu vào `runs/<ngày_giờ>/replaced_checkpoints/`.
+4. **Duyệt rồi mới chép:** kết quả train nằm trong `runs/<ngày_giờ>/`, **không tự ghi đè** `checkpoints/` và `outputs/plots/`. Xem `SUMMARY.md` xong mới duyệt bằng `--approve` (hoặc trả lời `y` ở câu hỏi cuối lần train); bản cũ được sao lưu vào `runs/<run>/approved_backup/<ngày_giờ>/`.
 
 ```bat
 train.bat                            :: kiểm tra + train tất cả (hoặc TIẾP TỤC run đang dở)
@@ -281,7 +281,10 @@ train.bat --tasks vessels,lesions    :: chỉ train vài bài (optic_disc_cup, v
 train.bat --epochs 5                 :: ghi đè số epoch cho mọi bài (mặc định 25-50, có early stopping)
 train.bat --batch-size 4             :: ghi đè batch size cố định
 train.bat --smoke                    :: chạy thử 1 epoch / 8 ảnh mỗi bài trước khi train thật (~1 phút)
-train.bat --no-promote               :: không chép checkpoint mới vào checkpoints/
+train.bat --tasks lesions --epochs 35 --batch-size 2 --image-size 512      :: train mới 1 bài với cấu hình cụ thể
+train.bat --tasks lesions --extra "--lr 0.0001 --patience 8"               :: thêm tham số riêng của script train (ghi đè mặc định)
+train.bat --approve 20261109_093724 --tasks optic_disc_cup,lesions         :: DUYỆT: chép checkpoint + biểu đồ của run vào checkpoints/ và outputs/plots/
+train.bat --promote                  :: tự duyệt, chép ngay khi từng bài train xong (mặc định KHÔNG tự chép)
 train.bat --new                      :: train mới từ đầu, KHÔNG tiếp tục run đang dở
 train.bat --resume 20261107_143800   :: tiếp tục đúng một run cụ thể trong runs/
 ```

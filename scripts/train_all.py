@@ -28,6 +28,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -53,11 +54,11 @@ HARDWARE_PROFILE = "RTX 4060 Laptop 8 GB, 512px"
 # ---------------------------------------------------------------------------------------------
 TASKS = [
     dict(key="optic_disc_cup", name="M1 Optic Disc & Cup (REFUGE2)",
-         module="src.training.train_optic_disc_cup", extra=[],   # REFUGE2 only since main@adebd18
+         module="src.training.train_optic_disc_cup", extra=["--norm", "group", "--patience", "10"],   # REFUGE2 only
          manifests=["manifests/optic_disc_cup/refuge2_train.csv", "manifests/optic_disc_cup/refuge2_val.csv",
                     "manifests/optic_disc_cup/refuge2_test.csv"],
          train_manifest="manifests/optic_disc_cup/refuge2_train.csv", train_factor=1.0,
-         model="unet:2", epochs=25, bs=4, peak_gb=6.8,
+         model="unet:2", epochs=30, bs=4, peak_gb=6.8,
          checkpoint="checkpoints/optic_disc_cup/best_od_oc_model.pth"),
     dict(key="vessels", name="M2 Vessels (DRIVE)",
          module="src.training.train_vessels", extra=[],
@@ -75,7 +76,7 @@ TASKS = [
          module="src.training.train_lesions", extra=[],
          manifests=["manifests/dr_lesions/idrid_lesions_train.csv", "manifests/dr_lesions/idrid_lesions_test.csv"],
          train_manifest="manifests/dr_lesions/idrid_lesions_train.csv", train_factor=0.8,
-         model="attunet:4", epochs=25, bs=2, peak_gb=4.84,
+         model="attunet:4", epochs=35, bs=2, peak_gb=4.84,
          checkpoint="checkpoints/lesions/best_lesion_model.pth"),
     dict(key="dr_grading", name="M5 DR Grading (APTOS)",
          module="src.training.train_dr_grading", extra=[],
@@ -548,7 +549,8 @@ def train_task(t, bs, epochs, run_dir, dev, log, args):
     plot_dir = run_dir / "plots" / t["key"]
     state_file = state_path_for(ckpt)
     resuming = state_file.exists()      # saved by the training script after every finished epoch
-    cmd = [PY, "-u", "-m", t["module"], *t["extra"], "--epochs", str(epochs), "--batch_size", str(bs),
+    cmd = [PY, "-u", "-m", t["module"], *t["extra"], *getattr(args, "extra_args", []),
+           "--epochs", str(epochs), "--batch_size", str(bs),
            "--image_size", str(args.image_size), "--output_checkpoint", str(ckpt), "--plot_dir", str(plot_dir)]
     if resuming:
         cmd.append("--resume")
@@ -692,17 +694,90 @@ def train_task(t, bs, epochs, run_dir, dev, log, args):
                 plots=str(plot_dir.relative_to(ROOT)), resumed=resuming)
 
 
-def promote(t, result, run_dir, log):
-    """Copies the new best checkpoint to the path main.py loads, backing up the old file first."""
-    src = ROOT / result["checkpoint"]
-    dst = ROOT / t["checkpoint"]
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if dst.exists():
-        backup = run_dir / "replaced_checkpoints" / t["checkpoint"]
-        backup.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(dst, backup)
-    shutil.copy2(src, dst)
-    log(f"   -> da cap nhat {t['checkpoint']} (ban cu luu tai {run_dir.relative_to(ROOT)}/replaced_checkpoints/)")
+def file_md5(path):
+    import hashlib
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def approve_run(run_name, keys, log, assume_yes=False):
+    """Approval step: copies the checkpoints and result plots of the approved tasks of a finished run into the
+    project (checkpoints/ = what main.py loads, outputs/plots/<task>/ = the published plots).
+    Everything that gets replaced is first backed up to runs/<run>/approved_backup/<timestamp>/.
+    Returns 0 on success."""
+    run_dir = ROOT / "runs" / Path(run_name).name
+    st = load_run_state(run_dir) if run_dir.is_dir() else None
+    if not st:
+        print(f"[X] Khong tim thay run '{run_name}' trong runs/ (hoac run chua train bai nao).")
+        return 2
+    done = [k for k, v in st["tasks"].items() if v["status"] == "DONE"]
+    sel = done if not keys else keys
+    bad = [k for k in sel if k not in done]
+    if bad:
+        print(f"[X] Bai khong duyet duoc (chua DONE trong run nay): {bad}. Bai DONE: {done}")
+        return 2
+    if not sel:
+        print("[X] Run nay khong co bai nao DONE de duyet.")
+        return 2
+
+    plan = []
+    for k in sel:
+        t = TASK_BY_KEY[k]
+        ckpt = run_dir / "checkpoints" / Path(t["checkpoint"]).name
+        plots = run_dir / "plots" / k
+        if not ckpt.is_file():
+            print(f"[X] {t['name']}: thieu checkpoint {ckpt.relative_to(ROOT)}")
+            return 2
+        plan.append((t, ckpt, plots, ROOT / t["checkpoint"], ROOT / "outputs" / "plots" / k))
+
+    print(f"\n=== DUYET KET QUA RUN {run_dir.name} ===")
+    for t, ckpt, plots, dst, pdst in plan:
+        same = dst.is_file() and file_md5(ckpt) == file_md5(dst)
+        r = st["tasks"][t["key"]].get("result", {})
+        print(f"  {t['name']:<34} {r.get('epochs_done', '?')}/{r.get('epochs_planned', '?')} epoch | {r.get('duration', '')}")
+        print(f"      checkpoint : {ckpt.relative_to(ROOT)} -> {t['checkpoint']}" + ("  (giong het ban dang dung)" if same else ""))
+        print(f"      bieu do    : {plots.relative_to(ROOT) if plots.is_dir() else '(khong co)'} -> outputs/plots/{t['key']}/")
+    if not assume_yes:
+        if not sys.stdin or not sys.stdin.isatty():
+            print("\n[X] Can xac nhan: chay lai voi --yes (hoac chay train.bat --approve trong cua so terminal).")
+            return 2
+        try:
+            ans = input("\nDuyet va sao chep cac muc tren vao checkpoints/ va outputs/plots/? (ban cu duoc sao luu) [y/N]: ")
+        except EOFError:
+            ans = ""
+        if ans.strip().lower() not in ("y", "yes"):
+            print("[i] Khong sao chep gi.")
+            return 1
+
+    tlog = Tee(run_dir / "approve_log.txt")
+    backup_root = run_dir / "approved_backup" / dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    entries = []
+    for t, ckpt, plots, dst, pdst in plan:
+        if dst.exists():
+            b = backup_root / t["checkpoint"]
+            b.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(dst, b)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ckpt, dst)
+        copied_plots = False
+        if plots.is_dir() and any(plots.iterdir()):
+            if pdst.exists():
+                shutil.copytree(pdst, backup_root / "outputs" / "plots" / t["key"])
+                shutil.rmtree(pdst)
+            shutil.copytree(plots, pdst)
+            copied_plots = True
+        entries.append(dict(task=t["key"], checkpoint=t["checkpoint"], md5=file_md5(dst), plots=copied_plots))
+        tlog(f"[{now()}] {t['name']}: {t['checkpoint']} <- {ckpt.relative_to(ROOT)}"
+             + (f" | outputs/plots/{t['key']}/ cap nhat" if copied_plots else ""))
+    hist_path = run_dir / "approved.json"
+    hist = json.loads(hist_path.read_text(encoding="utf-8")) if hist_path.is_file() else []
+    hist.append(dict(time=now(), items=entries, backup=str(backup_root.relative_to(ROOT))))
+    hist_path.write_text(json.dumps(hist, indent=2, ensure_ascii=False), encoding="utf-8")
+    tlog(f"  Ban cu da sao luu tai: {backup_root.relative_to(ROOT)}")
+    return 0
 
 
 # ---------------------------------------------------------------------------------------------
@@ -761,7 +836,16 @@ def main():
     ap.add_argument("--image-size", dest="image_size", type=int, default=None, help="mac dinh 512")
     ap.add_argument("--check-only", action="store_true", help="chi kiem tra thiet bi + du lieu, khong train")
     ap.add_argument("--smoke", action="store_true", help="chay thu 1 epoch/8 anh moi bai truoc khi train (~1 phut)")
-    ap.add_argument("--no-promote", action="store_true", help="khong chep checkpoint moi vao checkpoints/")
+    ap.add_argument("--extra", default=None, metavar='"ARGS"',
+                    help='tham so them cho script train cua cac bai da chon, vd: --extra "--lr 0.0001 --patience 8" '
+                         '(de ghi de mac dinh; dung --batch-size/--epochs/--image-size cho 3 tham so do)')
+    ap.add_argument("--approve", metavar="RUN", default=None,
+                    help="DUYET: sao chep checkpoint + bieu do cua RUN vao checkpoints/ va outputs/plots/ "
+                         "(dung --tasks de chon bai, --yes de bo qua cau hoi)")
+    ap.add_argument("--yes", action="store_true", help="dung voi --approve: khong hoi xac nhan")
+    ap.add_argument("--promote", action="store_true",
+                    help="tu dong duyet: chep ngay checkpoint + bieu do moi vao checkpoints/ khi tung bai train xong")
+    ap.add_argument("--no-promote", action="store_true", help=argparse.SUPPRESS)  # cu: khong con tu chep mac dinh
     ap.add_argument("--require-gpu", action="store_true", help="dung lai neu khong co GPU")
     ap.add_argument("--new", action="store_true", help="bat dau run moi, KHONG tiep tuc run dang do")
     ap.add_argument("--resume", metavar="RUN", default=None,
@@ -774,6 +858,19 @@ def main():
     if args.new and args.resume:
         print("[!] Khong dung --new cung --resume.")
         return 2
+    if args.approve:
+        keys = [] if args.tasks == "all" else [k.strip() for k in args.tasks.split(",") if k.strip()]
+        unknown = [k for k in keys if k not in TASK_BY_KEY]
+        if unknown:
+            print(f"[!] Khong biet bai toan: {unknown}. Hop le: {list(TASK_BY_KEY)}")
+            return 2
+        return approve_run(args.approve, keys, print, assume_yes=args.yes)
+    try:
+        extra_args = shlex.split(args.extra, posix=False) if args.extra else []
+    except ValueError as exc:
+        print(f"[!] --extra khong hop le: {exc}")
+        return 2
+    extra_args = [a.strip('"') for a in extra_args]
 
     # ---- continue an unfinished run? -------------------------------------------------------
     run_dir, rstate = None, None
@@ -796,9 +893,9 @@ def main():
         cfg = rstate["config"]
         tasks = [TASK_BY_KEY[k] for k in cfg["tasks"]]
         ignored = [f for f, v in (("--tasks", args.tasks != "all"), ("--epochs", args.epochs),
-                                  ("--image-size", args.image_size)) if v]
+                                  ("--image-size", args.image_size), ("--extra", args.extra)) if v]
         args.image_size = cfg["image_size"]
-        args.no_promote = args.no_promote or cfg["no_promote"]
+        extra_args = cfg.get("extra", [])
         log = Tee(run_dir / "train_log.txt")
         log("\n" + "=" * 78)
         log(f" FUNDUS AI - TIEP TUC (RESUME) | {started}")
@@ -825,7 +922,10 @@ def main():
         log(f" FUNDUS AI - TRAIN TOAN BO | {started}")
         log(f" Thu muc ket qua: {run_dir.relative_to(ROOT)}  (khong ghi de lan train truoc)")
         log(f" Bai toan: {', '.join(t['key'] for t in tasks)}")
+        if extra_args:
+            log(f" Tham so them (--extra): {' '.join(extra_args)}")
         log("=" * 78)
+    args.extra_args = extra_args
     run_started = rstate.get("started", started) if rstate else started
 
     # ---- preflight + batch sizes (only for the tasks that still need training) ----------------
@@ -857,7 +957,7 @@ def main():
                       config=dict(tasks=[t["key"] for t in tasks],
                                   epochs={t["key"]: args.epochs or t["epochs"] for t in tasks},
                                   batch={t["key"]: chosen.get(t["key"], {}).get("bs", t["bs"]) for t in tasks},
-                                  image_size=args.image_size, no_promote=args.no_promote),
+                                  image_size=args.image_size, extra=extra_args),
                       tasks={t["key"]: dict(status="PENDING") for t in tasks})
     for t in blocked:
         rstate["tasks"][t["key"]] = dict(status="BLOCKED", problems=report["tasks"][t["key"]]["problems"])
@@ -881,8 +981,8 @@ def main():
             rstate["tasks"][current] = dict(status=r["status"], result=r)
             save_run_state(run_dir, rstate)
             log(f"   => {r['status']} | {r['epochs_done']}/{r['epochs_planned']} epoch | {r['duration']} | {r['best']}")
-            if r["status"] == "DONE" and not args.no_promote:
-                promote(t, r, run_dir, log)
+            if r["status"] == "DONE" and args.promote:
+                approve_run(run_dir.name, [current], log, assume_yes=True)
             current = None
     except KeyboardInterrupt:
         if current:
@@ -898,6 +998,19 @@ def main():
     if unfinished(rstate):
         log("\n  [i] Run chua xong. Chay lai train.bat de TIEP TUC (bai da xong se bo qua, bai dang do train tiep"
             " tu epoch da luu). Muon train lai tu dau: train.bat --new")
+    done_keys = [k for k, v in rstate["tasks"].items() if v["status"] == "DONE"]
+    approved = {e["task"] for h in (json.loads((run_dir / "approved.json").read_text(encoding="utf-8"))
+                                    if (run_dir / "approved.json").is_file() else []) for e in h["items"]}
+    pending = [k for k in done_keys if k not in approved]
+    if pending and not args.promote:
+        hint = f"train.bat --approve {run_dir.name} --tasks {','.join(pending)}"
+        log(f"\n  [i] Ket qua CHUA duoc chep vao checkpoints/ va outputs/plots/. Sau khi xem SUMMARY.md, duyet bang:\n      {hint}")
+        if sys.stdin and sys.stdin.isatty():
+            try:
+                if input("\n  Duyet va sao chep ngay bay gio? [y/N]: ").strip().lower() in ("y", "yes"):
+                    approve_run(run_dir.name, pending, log, assume_yes=True)
+            except (EOFError, KeyboardInterrupt):
+                pass
     return 0 if all(v["status"] == "DONE" for v in rstate["tasks"].values()) else 1
 
 

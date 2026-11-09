@@ -64,8 +64,17 @@ def evaluate(
                     th = thresholds[c]
                     pred_c = (probs[i, c] > th).astype(np.uint8) * 255
                     gt_c = (gts[i, c] > 0).astype(np.uint8) * 255
-                    m = calculate_segmentation_metrics(pred_c, gt_c)
-                    channel_dices[c].append(m["dice"])
+
+                    gt_has_lesion = np.sum(gt_c > 0) > 0
+                    pred_has_lesion = np.sum(pred_c > 0) > 0
+
+                    if gt_has_lesion:
+                        m = calculate_segmentation_metrics(pred_c, gt_c)
+                        channel_dices[c].append(m["dice"])
+                    elif pred_has_lesion:
+                        # False alarm on truly normal retina: penalize with 0.0 Dice
+                        channel_dices[c].append(0.0)
+                    # If neither GT nor Pred has lesions (true negative image), do not append 1.0 to falsely inflate Dice
 
     avg_val_loss = val_loss / max(len(data_loader), 1)
     dices_per_class = [float(np.mean(d)) if d else 0.0 for d in channel_dices]
@@ -85,12 +94,15 @@ def evaluate(
 def train_lesions(
     train_manifest: str = "manifests/dr_lesions/idrid_lesions_train.csv",
     test_manifest: str = "manifests/dr_lesions/idrid_lesions_test.csv",
-    epochs: int = 25,
+    epochs: int = 35,
     batch_size: int = 2,
-    lr: float = 3e-4,
+    lr: float = 1.5e-4,
     image_size: int = 512,
     val_split: float = 0.2,
-    patience: int = 6,
+    patience: int = 12,
+    focal_weight: float = 0.1,
+    dice_weight: float = 0.9,
+    pos_weight: float = 12.0,
     limit: int | None = None,
     output_checkpoint: str = "checkpoints/lesions/best_lesion_model.pth",
     plot_dir: str = "outputs/plots/lesions",
@@ -99,8 +111,8 @@ def train_lesions(
     print("===================================================================")
     print("[*] FUNDUS AI - Training Attention U-Net on IDRiD Retinal Lesions")
     print(f"    Train manifest: {train_manifest} | Epochs: {epochs} | Batch size: {batch_size} | LR: {lr}")
-    print(f"    Early stopping patience: {patience} epochs | MultiChannelFocalDiceLoss active")
-    print(f"    Plots output:   {plot_dir}")
+    print(f"    Combo Loss active: {focal_weight}*WeightedFocal(pos_weight={pos_weight}) + {dice_weight}*SoftDice")
+    print(f"    Early stopping patience: {patience} epochs | Plots output: {plot_dir}")
     print("===================================================================\n")
 
     aug = JointFundusAugmentation(p_flip_h=0.5, p_flip_v=0.5, p_rotate=0.5, max_angle=20.0)
@@ -126,7 +138,13 @@ def train_lesions(
     print(f"[*] Training Device: {device} | Train: {n_train} | Val: {n_val} | Isolated Test: {len(test_dataset)}")
 
     model = AttentionUNet(in_channels=3, num_classes=4).to(device)
-    criterion = MultiChannelFocalDiceLoss(focal_weight=0.5, dice_weight=0.5, gamma=2.0, alpha=0.75)
+    criterion = MultiChannelFocalDiceLoss(
+        focal_weight=focal_weight,
+        dice_weight=dice_weight,
+        pos_weight=pos_weight,
+        gamma=2.0,
+        alpha=0.8
+    )
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
@@ -236,12 +254,15 @@ def main():
     parser = argparse.ArgumentParser(description="Train Attention U-Net on IDRiD Lesions")
     parser.add_argument("--train_manifest", type=str, default="manifests/dr_lesions/idrid_lesions_train.csv")
     parser.add_argument("--test_manifest", type=str, default="manifests/dr_lesions/idrid_lesions_test.csv")
-    parser.add_argument("--epochs", type=int, default=25)
+    parser.add_argument("--epochs", type=int, default=35)
     parser.add_argument("--batch_size", type=int, default=2)
-    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--lr", type=float, default=1.5e-4)
     parser.add_argument("--image_size", type=int, default=512)
     parser.add_argument("--val_split", type=float, default=0.2)
-    parser.add_argument("--patience", type=int, default=6)
+    parser.add_argument("--patience", type=int, default=12)
+    parser.add_argument("--focal_weight", type=float, default=0.1, help="Weight for Focal/BCE loss")
+    parser.add_argument("--dice_weight", type=float, default=0.9, help="Weight for Soft Dice loss")
+    parser.add_argument("--pos_weight", type=float, default=12.0, help="Positive class weight for gradient priming")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--output_checkpoint", type=str, default="checkpoints/lesions/best_lesion_model.pth")
     parser.add_argument("--plot_dir", type=str, default="outputs/plots/lesions")
@@ -257,6 +278,9 @@ def main():
         image_size=args.image_size,
         val_split=args.val_split,
         patience=args.patience,
+        focal_weight=args.focal_weight,
+        dice_weight=args.dice_weight,
+        pos_weight=args.pos_weight,
         limit=args.limit,
         output_checkpoint=args.output_checkpoint,
         plot_dir=args.plot_dir,

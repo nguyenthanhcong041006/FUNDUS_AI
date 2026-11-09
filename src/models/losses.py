@@ -111,15 +111,17 @@ class MultiChannelFocalDiceLoss(nn.Module):
 
     def __init__(
         self,
-        focal_weight: float = 0.5,
-        dice_weight: float = 0.5,
+        focal_weight: float = 0.1,
+        dice_weight: float = 0.9,
+        pos_weight: float = 12.0,
         gamma: float = 2.0,
-        alpha: float = 0.75,
+        alpha: float = 0.8,
         smooth: float = 1e-6
     ):
         super().__init__()
         self.focal_weight = focal_weight
         self.dice_weight = dice_weight
+        self.pos_weight = pos_weight
         self.gamma = gamma
         self.alpha = alpha
         self.smooth = smooth
@@ -127,6 +129,7 @@ class MultiChannelFocalDiceLoss(nn.Module):
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         num_channels = logits.size(1)
         probs = torch.sigmoid(logits)
+        pw = torch.tensor(self.pos_weight, device=logits.device, dtype=logits.dtype) if self.pos_weight > 0 else None
 
         channel_losses = []
         for c in range(num_channels):
@@ -134,13 +137,13 @@ class MultiChannelFocalDiceLoss(nn.Module):
             p_c = probs[:, c]
             t_c = targets[:, c]
 
-            # 1. Per-channel Focal Loss
-            bce = F.binary_cross_entropy_with_logits(l_c, t_c, reduction="none")
+            # 1. Per-channel Weighted Focal Loss (Positive Gradient Priming)
+            bce = F.binary_cross_entropy_with_logits(l_c, t_c, pos_weight=pw, reduction="none")
             p_t = t_c * p_c + (1.0 - t_c) * (1.0 - p_c)
             alpha_t = t_c * self.alpha + (1.0 - t_c) * (1.0 - self.alpha)
             focal = (alpha_t * ((1.0 - p_t) ** self.gamma) * bce).mean()
 
-            # 2. Per-channel Soft Dice Loss
+            # 2. Per-channel Soft Dice Loss (Boundary & Spatial Overlap Control)
             p_flat = p_c.reshape(-1)
             t_flat = t_c.reshape(-1)
             inter = (p_flat * t_flat).sum()
